@@ -1,0 +1,26 @@
+[Unit]
+Description=Genon AI 주간 세미나 슬랙 봇 (Socket Mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kube
+WorkingDirectory=/opt/seminar-bot
+EnvironmentFile=/opt/seminar-bot/.env
+ExecStart=/opt/seminar-bot/.venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=5
+
+# 로그는 journalctl 로 본다: journalctl -u seminar-bot -f
+StandardOutput=journal
+StandardError=journal
+
+# 보안 옵션
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
