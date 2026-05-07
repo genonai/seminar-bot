@@ -91,7 +91,9 @@ def generate_next_cycle(
         start = start + timedelta(days=7)
 
     cycle_id = _next_cycle_id(conn)
-    members = member_service.get_all(conn)
+    members = member_service.get_all_active(conn)
+    if not members:
+        raise ValueError("active 멤버 0명 — 채널 sync 가 동작하지 않거나 채널이 비었음")
     dates = [start + timedelta(weeks=w) for w in range(CYCLE_LENGTH_WEEKS)]
 
     rng = random.Random(seed if seed is not None else cycle_id)

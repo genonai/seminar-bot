@@ -140,7 +140,7 @@ def select_next_replacement(
     # 현 cycle 안에 있는 모든 멤버 이름
     in_cycle = _members_in_cycle(conn, d.original_date)
 
-    all_members = member_service.get_all(conn)
+    all_members = member_service.get_all_active(conn)
 
     # Tier 1: cycle 밖 (free agent)
     free_agents = [m for m in all_members if m.name not in excluded and m.name not in in_cycle]

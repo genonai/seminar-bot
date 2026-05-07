@@ -1,10 +1,17 @@
 """멤버 조회/갱신 서비스."""
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import date
 
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
+from ..config import ADMIN_USER_IDS, CHANNEL_ID
 from ..models import Member, Preferences
+
+log = logging.getLogger(__name__)
 
 
 def _row_to_member(row: sqlite3.Row) -> Member:
@@ -20,7 +27,14 @@ def _row_to_member(row: sqlite3.Row) -> Member:
 
 
 def get_all(conn: sqlite3.Connection) -> list[Member]:
+    """모든 멤버 (active + inactive). 로그/historical 용도."""
     rows = conn.execute("SELECT * FROM members ORDER BY name").fetchall()
+    return [_row_to_member(r) for r in rows]
+
+
+def get_all_active(conn: sqlite3.Connection) -> list[Member]:
+    """현재 채널에 있고 풀에 포함되는 멤버만. 추첨/대체자 선정에 쓴다."""
+    rows = conn.execute("SELECT * FROM members WHERE is_active = 1 ORDER BY name").fetchall()
     return [_row_to_member(r) for r in rows]
 
 
@@ -39,3 +53,108 @@ def get_by_slack_id(conn: sqlite3.Connection, slack_user_id: str) -> Member | No
 def name_to_slack_id_map(conn: sqlite3.Connection) -> dict[str, str]:
     rows = conn.execute("SELECT name, slack_user_id FROM members").fetchall()
     return {r["name"]: r["slack_user_id"] for r in rows}
+
+
+# ─────────────────────────────────────────────────────────────
+# 채널 동기화 (source of truth: Slack 채널 membership)
+# ─────────────────────────────────────────────────────────────
+def sync_from_channel(
+    client: WebClient,
+    conn: sqlite3.Connection,
+    *,
+    channel_id: str = CHANNEL_ID,
+    exclude_user_ids: tuple[str, ...] = ADMIN_USER_IDS,
+) -> tuple[list[Member], list[str]]:
+    """채널 멤버 fetch → 운영자/봇 제외 → DB upsert + 떠난 멤버 is_active=0.
+
+    반환: (active_members, errors)
+    `channels:read` scope 없거나 채널 접근 불가면 빈 리스트 + 에러 메시지 반환 (no-op).
+    """
+    errors: list[str] = []
+    member_ids: list[str] = []
+    cursor: str | None = None
+    try:
+        while True:
+            kwargs = {"channel": channel_id, "limit": 200}
+            if cursor:
+                kwargs["cursor"] = cursor
+            resp = client.conversations_members(**kwargs)
+            member_ids.extend(resp["members"])
+            cursor = resp.get("response_metadata", {}).get("next_cursor") or None
+            if not cursor:
+                break
+    except SlackApiError as e:
+        err = e.response["error"]
+        log.warning("sync_from_channel: conversations.members 실패 (%s) — 동기화 skip", err)
+        errors.append(err)
+        return [], errors
+
+    excluded = set(exclude_user_ids)
+    eligible: list[tuple[str, str]] = []   # (slack_id, real_name)
+    for uid in member_ids:
+        if uid in excluded:
+            continue
+        try:
+            info = client.users_info(user=uid)
+        except SlackApiError as e:
+            log.warning("users.info(%s) 실패: %s", uid, e.response["error"])
+            errors.append(f"users.info {uid}: {e.response['error']}")
+            continue
+        u = info["user"]
+        if u.get("is_bot") or u.get("deleted"):
+            continue
+        profile = u.get("profile", {})
+        name = (
+            profile.get("display_name_normalized")
+            or profile.get("real_name_normalized")
+            or u.get("real_name")
+            or u.get("name")
+        )
+        if not name:
+            continue
+        eligible.append((uid, name))
+
+    eligible_ids = {uid for uid, _ in eligible}
+    empty_prefs = Preferences().to_json()
+
+    with conn:
+        # 일단 모두 비활성화 — 채널에 있는 멤버만 다시 활성화
+        conn.execute("UPDATE members SET is_active = 0")
+        for uid, name in eligible:
+            existing = conn.execute(
+                "SELECT name FROM members WHERE slack_user_id = ?", (uid,)
+            ).fetchone()
+            if existing is None:
+                # 신규 — 이름 충돌 가능성: 같은 이름이 다른 slack_id로 있으면 suffix 붙임
+                final_name = _resolve_name_collision(conn, name, uid)
+                conn.execute(
+                    """
+                    INSERT INTO members (name, slack_user_id, preferences, is_active)
+                    VALUES (?, ?, ?, 1)
+                    """,
+                    (final_name, uid, empty_prefs),
+                )
+                log.info("sync: 신규 멤버 %s (%s)", final_name, uid)
+            else:
+                conn.execute(
+                    "UPDATE members SET is_active = 1 WHERE slack_user_id = ?",
+                    (uid,),
+                )
+
+    active = get_all_active(conn)
+    log.info("sync_from_channel: %d active (channel=%s, excluded=%d)",
+             len(active), channel_id, len(excluded))
+    return active, errors
+
+
+def _resolve_name_collision(conn: sqlite3.Connection, name: str, slack_user_id: str) -> str:
+    """name이 이미 다른 slack_user_id 로 존재하면 (2), (3) 같은 suffix 부여."""
+    row = conn.execute("SELECT slack_user_id FROM members WHERE name = ?", (name,)).fetchone()
+    if row is None or row["slack_user_id"] == slack_user_id:
+        return name
+    n = 2
+    while True:
+        candidate = f"{name} ({n})"
+        if conn.execute("SELECT 1 FROM members WHERE name = ?", (candidate,)).fetchone() is None:
+            return candidate
+        n += 1

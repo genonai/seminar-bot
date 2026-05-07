@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.db import SCHEMA
+from src.db import MIGRATIONS, SCHEMA
 from src.models import Preferences
 from src.services import cycle_service
 
@@ -17,6 +17,10 @@ def _conn() -> sqlite3.Connection:
     c.row_factory = sqlite3.Row
     for stmt in SCHEMA:
         c.execute(stmt)
+    for table, column, ddl in MIGRATIONS:
+        cols = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     return c
 
 
@@ -26,7 +30,7 @@ def _seed_members(conn: sqlite3.Connection, names: list[str], prefs: dict[str, P
         for n in names:
             p = prefs.get(n, Preferences())
             conn.execute(
-                "INSERT INTO members (name, slack_user_id, preferences) VALUES (?, ?, ?)",
+                "INSERT INTO members (name, slack_user_id, preferences, is_active) VALUES (?, ?, ?, 1)",
                 (n, "U" + n, p.to_json()),
             )
 

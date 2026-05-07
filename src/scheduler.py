@@ -17,7 +17,7 @@ from slack_sdk import WebClient
 
 from .config import DB_PATH, TIMEZONE
 from .db import session
-from .services import cycle_service, notification_service
+from .services import cycle_service, member_service, notification_service
 
 log = logging.getLogger(__name__)
 
@@ -59,10 +59,17 @@ def _job_cycle_check(client: WebClient) -> None:
         if not cycle_service.needs_new_cycle(conn, today, threshold_weeks=2):
             log.info("cycle_check: 충분히 남음, skip")
             return
-        log.info("cycle_check: 잔여 일정 부족, 새 사이클 자동 추첨")
+        log.info("cycle_check: 잔여 일정 부족, 사이클 직전 sync + 새 사이클 추첨")
+        member_service.sync_from_channel(client, conn)
         cycle_id, schedules = cycle_service.generate_next_cycle(conn, today)
     notification_service.announce_new_cycle(client, schedules, cycle_id)
     log.info("새 사이클 cycle_id=%d 공지 완료", cycle_id)
+
+
+def _job_member_sync(client: WebClient) -> None:
+    with session(DB_PATH) as conn:
+        active, errors = member_service.sync_from_channel(client, conn)
+    log.info("member_sync: active=%d errors=%s", len(active), errors)
 
 
 def start_scheduler(client: WebClient) -> BackgroundScheduler:
@@ -92,6 +99,11 @@ def start_scheduler(client: WebClient) -> BackgroundScheduler:
         _job_cycle_check, args=(client,),
         trigger=CronTrigger(day_of_week="sat", hour=9, minute=0, timezone=TIMEZONE),
         id="cycle_check", replace_existing=True,
+    )
+    scheduler.add_job(
+        _job_member_sync, args=(client,),
+        trigger=CronTrigger(hour=9, minute=0, timezone=TIMEZONE),  # 매일 09:00
+        id="member_sync", replace_existing=True,
     )
 
     scheduler.start()

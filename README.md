@@ -59,6 +59,16 @@ cp .env.example .env       # 토큰/키 채우기
 .venv/bin/python -m src.main
 ```
 
+## Slack OAuth Scopes
+
+Bot Token Scopes:
+- `chat:write` — 메시지 발송
+- `commands` — 슬래시 커맨드
+- `im:history`, `im:write` — DM
+- `users:read` — 유저 정보 조회
+- `app_mentions:read` — 멘션 이벤트
+- `channels:read` — **채널 멤버십 sync (없으면 sync 동작 안 함, 봇은 동작)**
+
 ## 환경변수 (`.env`)
 
 | 변수 | 설명 |

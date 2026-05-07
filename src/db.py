@@ -76,6 +76,12 @@ SCHEMA: tuple[str, ...] = (
 )
 
 
+# 점진적 마이그레이션 — (table, column, full DDL after ADD COLUMN)
+MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("members", "is_active", "INTEGER NOT NULL DEFAULT 1"),
+)
+
+
 def connect(db_path: Path | str) -> sqlite3.Connection:
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +95,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
     with conn:
         for stmt in SCHEMA:
             conn.execute(stmt)
+        for table, column, ddl in MIGRATIONS:
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 @contextmanager
