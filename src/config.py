@@ -29,11 +29,19 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 
 # ─────────────────────────────────────────────────────────────
-# 운영자 (양쪽 승인 필요)
+# 운영자 (.env 의 ADMIN_USER_IDS 콤마 구분 리스트로 관리)
+#   첫 번째 ID = primary (연기 승인 DM, 채널 공지에서 멘션, /세미나-재추첨 등)
 # ─────────────────────────────────────────────────────────────
-ADMIN_JJR: str = "U07GFTZ6LM8"
-ADMIN_KDP: str = "U01UPAEG4F5"
-ADMIN_USER_IDS: tuple[str, str] = (ADMIN_JJR, ADMIN_KDP)
+def _parse_admin_ids(raw: str | None) -> tuple[str, ...]:
+    if not raw:
+        return ("U07GFTZ6LM8", "U01UPAEG4F5")
+    parts = [x.strip() for x in raw.split(",") if x.strip()]
+    return tuple(parts) if parts else ("U07GFTZ6LM8", "U01UPAEG4F5")
+
+
+ADMIN_USER_IDS: tuple[str, ...] = _parse_admin_ids(os.getenv("ADMIN_USER_IDS"))
+ADMIN_JJR: str = ADMIN_USER_IDS[0]                                    # primary
+ADMIN_KDP: str = ADMIN_USER_IDS[1] if len(ADMIN_USER_IDS) > 1 else ADMIN_JJR
 
 
 # ─────────────────────────────────────────────────────────────
