@@ -277,3 +277,16 @@ def jjr_rejection_dm(*, requester: str, original_date: date) -> str:
     return (
         f":x: {requester}님 {fmt_date(original_date)} 연기 신청이 운영자(진재)에 의해 거절되었습니다."
     )
+
+
+# ─────────────────────────────────────────────────────────────
+# 버튼 클릭 후 메시지 freeze (actions 제거 + status 추가)
+# ─────────────────────────────────────────────────────────────
+def freeze_with_status(original_blocks: list[dict], status_text: str) -> list[dict]:
+    """기존 메시지 블록에서 actions 블록을 제거하고 status context를 footer에 추가."""
+    kept = [b for b in original_blocks if b.get("type") != "actions"]
+    kept.append({
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": status_text}],
+    })
+    return kept
