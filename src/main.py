@@ -6,6 +6,7 @@ import logging
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from .config import LOG_LEVEL, SLACK_APP_TOKEN
+from .scheduler import start_scheduler
 from .slack.app import build_app
 
 
@@ -19,6 +20,7 @@ def main() -> None:
 
     app = build_app()
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+    start_scheduler(app.client)            # APScheduler 백그라운드 스레드
     logging.info("Socket Mode 시작 — Ctrl+C로 종료")
     handler.start()
 
