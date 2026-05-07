@@ -75,32 +75,47 @@ cp .env.example .env       # 토큰/키 채우기
 | `TIMEZONE` | 기본 `Asia/Seoul` |
 | `LOG_LEVEL` | 기본 `INFO` |
 
-## 181 서버 배포
+## 배포 (Docker)
 
-처음 한 번:
+서버에 시스템 패키지(python3.11 등) 설치 안 함. Docker 이미지 안에서 격리.
+
+### 처음 한 번 (서버)
+
 ```bash
-# 로컬에서
-bash deploy/sync.sh                      # /opt/seminar-bot 으로 rsync
+# repo clone (deploy key 사용)
+sudo mkdir -p /opt/seminar-bot
+sudo chown -R $USER:$USER /opt/seminar-bot
+git clone git@github.com:genonai/seminar-bot.git /opt/seminar-bot
+cd /opt/seminar-bot
 
-# 181 서버에서
-ssh kube-server
-sudo nano /opt/seminar-bot/.env          # 토큰/키 채우기 (한 번만)
-sudo bash /opt/seminar-bot/deploy/install.sh
-sudo -u kube /opt/seminar-bot/.venv/bin/python /opt/seminar-bot/scripts/seed_schedule.py --shuffle
+# .env 채우기 (로컬에서 scp 또는 vi)
+chmod 600 .env
+
+# 이미지 빌드 + 시작
+bash deploy/install.sh
+
+# 1차 schedule 시드 (한 번만; 멤버는 entrypoint에서 자동 시드)
+docker compose exec bot python scripts/seed_schedule.py --shuffle
 ```
 
-이후 코드 갱신:
+### 코드 갱신
+
 ```bash
-bash deploy/sync.sh
-ssh kube-server "sudo systemctl restart seminar-bot"
+cd /opt/seminar-bot
+git pull
+docker compose up -d --build
 ```
 
-운영 명령:
+### 운영 명령
+
 ```bash
-ssh kube-server "sudo systemctl status seminar-bot"
-ssh kube-server "sudo journalctl -u seminar-bot -f"
-ssh kube-server "sudo systemctl stop seminar-bot"
+docker compose logs -f      # 실시간 로그
+docker compose ps           # 컨테이너 상태
+docker compose restart      # 재시작
+docker compose down         # 정지
 ```
+
+DB 백업: `/opt/seminar-bot/data/seminar.db` 파일을 정기적으로 복사 (호스트 볼륨 mount).
 
 ## 테스트
 

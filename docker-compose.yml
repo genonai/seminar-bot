@@ -1,0 +1,17 @@
+services:
+  bot:
+    build: .
+    image: seminar-bot:latest
+    container_name: seminar-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # SQLite 영속 저장. 호스트의 ./data 가 컨테이너의 /var/lib/seminar-bot 으로 mount.
+      - ./data:/var/lib/seminar-bot
+    environment:
+      # .env의 DB_PATH는 컨테이너 내부 경로여야 함 (호스트 경로 X)
+      DB_PATH: /var/lib/seminar-bot/seminar.db
+      TZ: Asia/Seoul
+    init: true
+    # Socket Mode라 inbound 포트 노출 안 함

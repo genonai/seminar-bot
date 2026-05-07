@@ -1,85 +1,52 @@
 #!/usr/bin/env bash
-# 181 서버 초기 설치 스크립트.
-# 사용: ssh kube-server, 그 다음 sudo bash /opt/seminar-bot/deploy/install.sh
+# 181 서버 (또는 다른 docker 가능한 머신) 초기 설치.
+# 사용: ssh kube-server, 그 다음 bash /opt/seminar-bot/deploy/install.sh
 #
 # 전제조건:
-#   - /opt/seminar-bot 에 코드가 이미 들어있음 (git clone 또는 rsync)
+#   - /opt/seminar-bot 에 코드가 있음 (git clone)
 #   - /opt/seminar-bot/.env 가 채워져있음 (실제 토큰)
-#   - python3.11 (또는 python3.12) 설치됨
-#
-# 환경변수 PYTHON 으로 인터프리터 override 가능:
-#   sudo PYTHON=/usr/bin/python3.11 bash deploy/install.sh
+#   - docker + docker compose v2 (`docker compose` 명령) 설치됨
 
 set -euo pipefail
 
 REPO_DIR="/opt/seminar-bot"
-DATA_DIR="/var/lib/seminar-bot"
-LOG_DIR="/var/log/seminar-bot"
-SERVICE_NAME="seminar-bot"
-
-# Python 인터프리터 자동 탐지 (3.11 우선)
-if [[ -z "${PYTHON:-}" ]]; then
-  for cand in python3.13 python3.12 python3.11 python3; do
-    if command -v "$cand" >/dev/null 2>&1; then
-      ver=$("$cand" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-      major=${ver%.*}; minor=${ver#*.}
-      if [[ "$major" -ge 3 ]] && [[ "$minor" -ge 11 ]]; then
-        PYTHON=$(command -v "$cand")
-        break
-      fi
-    fi
-  done
-fi
-if [[ -z "${PYTHON:-}" ]]; then
-  echo "❌ python3.11+ 를 찾지 못함. 'sudo dnf install -y python3.11' 후 재시도."
-  exit 1
-fi
-echo "▶ Python: $PYTHON ($($PYTHON --version))"
-
-if [[ "${EUID}" -ne 0 ]]; then
-  echo "❌ root로 실행해야 함: sudo bash $0"
-  exit 1
-fi
-
-echo "▶ 디렉토리 준비"
-mkdir -p "${DATA_DIR}" "${LOG_DIR}"
-chown -R kube:kube "${DATA_DIR}" "${LOG_DIR}" "${REPO_DIR}"
-
-echo "▶ Python venv + 의존성 (기존 .venv 있으면 제거)"
 cd "${REPO_DIR}"
-rm -rf .venv
-sudo -u kube "$PYTHON" -m venv .venv
-sudo -u kube .venv/bin/pip install --upgrade pip wheel setuptools
-sudo -u kube .venv/bin/pip install -e .
 
-echo "▶ DB 초기화 (멱등)"
-sudo -u kube .venv/bin/python scripts/init_db.py
-
-echo "▶ 멤버 시드 (멱등)"
-sudo -u kube .venv/bin/python scripts/seed_members.py
-
-if [[ ! -f "${DATA_DIR}/seminar.db" ]] || [[ -z "$(sudo -u kube .venv/bin/python -c "
-from src.config import DB_PATH
-from src.db import session
-with session(DB_PATH) as conn:
-    print(conn.execute('SELECT COUNT(*) FROM schedule').fetchone()[0])
-")" ]]; then
-  echo "ℹ️  schedule이 비어있다면 다음 명령으로 5주 사이클 시드:"
-  echo "    sudo -u kube ${REPO_DIR}/.venv/bin/python ${REPO_DIR}/scripts/seed_schedule.py --shuffle"
+if ! command -v docker >/dev/null 2>&1; then
+  echo "❌ docker 미설치. company server에 docker 설치 권한이 있는지 확인 필요."
+  exit 1
 fi
 
-echo "▶ systemd unit 설치"
-cp "${REPO_DIR}/deploy/seminar-bot.service" "/etc/systemd/system/${SERVICE_NAME}.service"
-systemctl daemon-reload
-systemctl enable "${SERVICE_NAME}"
-systemctl restart "${SERVICE_NAME}"
+if ! docker compose version >/dev/null 2>&1; then
+  echo "❌ 'docker compose' 플러그인 없음. docker compose v2 설치 필요."
+  echo "   참고: https://docs.docker.com/compose/install/linux/"
+  exit 1
+fi
+
+if [[ ! -f "${REPO_DIR}/.env" ]]; then
+  echo "❌ ${REPO_DIR}/.env 없음. 토큰 채워 넣고 다시 실행."
+  exit 1
+fi
+
+echo "▶ DB 영속 디렉토리 준비"
+mkdir -p "${REPO_DIR}/data"
+
+echo "▶ 이미지 빌드"
+docker compose build
+
+echo "▶ 컨테이너 시작 (백그라운드)"
+docker compose up -d
 
 sleep 2
-echo "▶ 상태 확인"
-systemctl status "${SERVICE_NAME}" --no-pager -l | head -20 || true
+echo "▶ 상태"
+docker compose ps
 
 echo ""
 echo "✅ 설치 완료"
-echo "로그 보기:    sudo journalctl -u ${SERVICE_NAME} -f"
-echo "재시작:       sudo systemctl restart ${SERVICE_NAME}"
-echo "정지:         sudo systemctl stop ${SERVICE_NAME}"
+echo "로그 보기:    docker compose -f ${REPO_DIR}/docker-compose.yml logs -f"
+echo "재시작:       docker compose -f ${REPO_DIR}/docker-compose.yml restart"
+echo "정지:         docker compose -f ${REPO_DIR}/docker-compose.yml down"
+echo "코드 갱신:    cd ${REPO_DIR} && git pull && docker compose up -d --build"
+echo ""
+echo "Schedule 시드는 별도로 (한 번):"
+echo "  docker compose exec bot python scripts/seed_schedule.py --shuffle"
