@@ -71,6 +71,14 @@ SCHEMA: tuple[str, ...] = (
       UNIQUE(type, target_date)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS admins (
+      slack_user_id   TEXT PRIMARY KEY,
+      added_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      added_by        TEXT,
+      is_primary      INTEGER NOT NULL DEFAULT 0
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_schedule_cycle ON schedule(cycle_id)",
     "CREATE INDEX IF NOT EXISTS idx_defer_status ON defer_requests(status)",
 )

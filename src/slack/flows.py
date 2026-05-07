@@ -16,12 +16,18 @@ from ..config import ADMIN_JJR, CHANNEL_ID, DB_PATH
 from ..db import session
 from ..models import Preferences
 from ..services import (
+    admin_service,
     defer_service,
     draft_service,
     member_service,
     preference_service,
     schedule_service,
 )
+
+
+def _primary_admin() -> str:
+    """현재 primary admin slack id (DB 우선, 없으면 env config 폴백)."""
+    return admin_service.get_primary_admin_id() or ADMIN_JJR
 from . import messages
 
 log = logging.getLogger(__name__)
@@ -58,7 +64,7 @@ def start_defer(
             deadline = defer_service.deadline_for(assigned_date)
             return (
                 f":no_entry_sign: 연기 신청 마감({deadline.isoformat()})이 지났습니다. "
-                f"운영자(<@{ADMIN_JJR}>)에게 직접 문의해주세요."
+                f"운영자(<@{_primary_admin()}>)에게 직접 문의해주세요."
             )
 
         # 기존 active draft 있으면 취소하고 새로 시작
@@ -447,7 +453,7 @@ def _send_approval_dms(client: WebClient, conn, defer_id: int) -> None:
     if candidate is None:
         defer_service.mark_escalated(conn, defer_id)
         d = defer_service.get(conn, defer_id)
-        client.chat_postMessage(channel=open_dm(client, ADMIN_JJR), text=messages.escalation_dm())
+        client.chat_postMessage(channel=open_dm(client, _primary_admin()), text=messages.escalation_dm())
         # 신청자에게도 안내
         requester_member = member_service.get_by_name(conn, d.requester)
         if requester_member:
@@ -461,7 +467,7 @@ def _send_approval_dms(client: WebClient, conn, defer_id: int) -> None:
     d = defer_service.get(conn, defer_id)
 
     # 진재님 DM
-    jjr_dm = open_dm(client, ADMIN_JJR)
+    jjr_dm = open_dm(client, _primary_admin())
     client.chat_postMessage(
         channel=jjr_dm,
         text=f"연기 신청 검토 — {d.requester} → {candidate.name}",
@@ -528,7 +534,7 @@ def on_replacement_decline(client: WebClient, *, defer_id: int) -> None:
         d = defer_service.get(conn, defer_id)
         if defer_service.is_escalation_needed(d):
             defer_service.mark_escalated(conn, defer_id)
-            client.chat_postMessage(channel=open_dm(client, ADMIN_JJR), text=messages.escalation_dm())
+            client.chat_postMessage(channel=open_dm(client, _primary_admin()), text=messages.escalation_dm())
             return
         # 진재 승인은 이미 받았더라도 대체자가 바뀌었으므로 진재 승인 무효화
         with conn:

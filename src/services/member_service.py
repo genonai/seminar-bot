@@ -8,7 +8,7 @@ from datetime import date
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from ..config import ADMIN_USER_IDS, CHANNEL_ID
+from ..config import CHANNEL_ID
 from ..models import Member, Preferences
 
 log = logging.getLogger(__name__)
@@ -63,13 +63,17 @@ def sync_from_channel(
     conn: sqlite3.Connection,
     *,
     channel_id: str = CHANNEL_ID,
-    exclude_user_ids: tuple[str, ...] = ADMIN_USER_IDS,
+    exclude_user_ids: tuple[str, ...] | None = None,
 ) -> tuple[list[Member], list[str]]:
     """채널 멤버 fetch → 운영자/봇 제외 → DB upsert + 떠난 멤버 is_active=0.
 
     반환: (active_members, errors)
     `channels:read` scope 없거나 채널 접근 불가면 빈 리스트 + 에러 메시지 반환 (no-op).
+    exclude_user_ids 미지정 시 admin_service에서 현재 운영자 list 조회.
     """
+    if exclude_user_ids is None:
+        from . import admin_service
+        exclude_user_ids = admin_service.get_admin_ids(conn)
     errors: list[str] = []
     member_ids: list[str] = []
     cursor: str | None = None

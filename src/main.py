@@ -5,10 +5,10 @@ import logging
 
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
-from .config import DB_PATH, LOG_LEVEL, SLACK_APP_TOKEN
-from .db import session
+from .config import ADMIN_USER_IDS, DB_PATH, LOG_LEVEL, SLACK_APP_TOKEN
+from .db import init_schema, session
 from .scheduler import start_scheduler
-from .services import member_service
+from .services import admin_service, member_service
 from .slack.app import build_app
 
 
@@ -22,6 +22,13 @@ def main() -> None:
 
     app = build_app()
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
+
+    # 스키마 보장 + admins 부트스트랩 (DB 비어있을 때 env로부터 1회)
+    with session(DB_PATH) as conn:
+        init_schema(conn)
+        n = admin_service.bootstrap_if_empty(conn, ADMIN_USER_IDS)
+        if n:
+            logging.info("admins bootstrapped: %d명 (%s)", n, ", ".join(ADMIN_USER_IDS))
 
     # 시작 시 채널 멤버 1회 sync (실패해도 봇은 계속 동작)
     with session(DB_PATH) as conn:

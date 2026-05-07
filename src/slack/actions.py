@@ -7,7 +7,7 @@ from datetime import date
 from slack_bolt import Ack, App, Respond
 from slack_sdk import WebClient
 
-from ..config import ADMIN_JJR
+from ..services import admin_service
 from . import flows, messages
 
 log = logging.getLogger(__name__)
@@ -84,23 +84,25 @@ def register(app: App) -> None:
             slack_user_id=body["user"]["id"],
         )
 
-    # ── 진재님 승인/거절 ─────────────────────────────────────
+    # ── 운영자 승인/거절 ──────────────────────────────────────
     @app.action("jjr_approve")
-    def on_jjr_approve(ack: Ack, body: dict, client: WebClient, respond: Respond) -> None:
+    def on_admin_approve(ack: Ack, body: dict, client: WebClient, respond: Respond) -> None:
         ack()
-        if body["user"]["id"] != ADMIN_JJR:
-            respond(text=":no_entry_sign: 진재님 본인만 승인 가능.", response_type="ephemeral")
+        clicker = body["user"]["id"]
+        if not admin_service.is_admin(clicker):
+            respond(text=":no_entry_sign: 운영자만 승인 가능.", response_type="ephemeral")
             return
-        _freeze(respond, body, f":white_check_mark: 승인됨 (by <@{ADMIN_JJR}>)")
+        _freeze(respond, body, f":white_check_mark: 승인됨 (by <@{clicker}>)")
         flows.on_jjr_approve(client, defer_id=int(body["actions"][0]["value"]))
 
     @app.action("jjr_reject")
-    def on_jjr_reject(ack: Ack, body: dict, client: WebClient, respond: Respond) -> None:
+    def on_admin_reject(ack: Ack, body: dict, client: WebClient, respond: Respond) -> None:
         ack()
-        if body["user"]["id"] != ADMIN_JJR:
-            respond(text=":no_entry_sign: 진재님 본인만 거절 가능.", response_type="ephemeral")
+        clicker = body["user"]["id"]
+        if not admin_service.is_admin(clicker):
+            respond(text=":no_entry_sign: 운영자만 거절 가능.", response_type="ephemeral")
             return
-        _freeze(respond, body, f":x: 거절됨 (by <@{ADMIN_JJR}>)")
+        _freeze(respond, body, f":x: 거절됨 (by <@{clicker}>)")
         flows.on_jjr_reject(client, defer_id=int(body["actions"][0]["value"]))
 
     # ── 대체자 수락/거절 ─────────────────────────────────────

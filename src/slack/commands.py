@@ -7,12 +7,33 @@ from datetime import date, timedelta
 from slack_bolt import Ack, App, Respond
 from slack_sdk import WebClient
 
-from ..config import ADMIN_USER_IDS, DB_PATH
+from ..config import DB_PATH
 from ..db import session
-from ..services import cycle_service, member_service, notification_service, schedule_service
+from ..services import (
+    admin_service,
+    cycle_service,
+    member_service,
+    notification_service,
+    schedule_service,
+)
 from . import flows, guards, messages
 
 log = logging.getLogger(__name__)
+
+
+def _parse_slack_user(text: str) -> str | None:
+    """슬래시 인자에서 슬랙 user ID 추출.
+    형식: '<@U07GFTZ6LM8|jinjae>' 또는 '<@U07GFTZ6LM8>' 또는 'U07GFTZ6LM8'."""
+    text = text.strip()
+    if not text:
+        return None
+    if text.startswith("<@") and ">" in text:
+        inner = text[2:text.index(">")]
+        return inner.split("|")[0]
+    first = text.split()[0]
+    if first.startswith("U") and len(first) >= 9:
+        return first
+    return None
 
 
 def register(app: App) -> None:
@@ -76,8 +97,8 @@ def register(app: App) -> None:
         ack()
         user_id = body["user_id"]
         log.info("/세미나-재추첨 user=%s channel=%s", user_id, body.get("channel_id"))
-        if user_id not in ADMIN_USER_IDS:
-            respond(text=":no_entry_sign: 운영자만 실행 가능합니다.", response_type="ephemeral")
+        if not admin_service.is_admin(user_id):
+            guards.reject_non_admin(respond)
             return
         if not guards.in_seminar_channel(body):
             guards.reject_wrong_channel(respond)
@@ -111,3 +132,60 @@ def register(app: App) -> None:
             ),
             response_type="ephemeral",
         )
+
+    # ─── 운영자 관리 ──────────────────────────────────────────
+    @app.command("/어드민-추가")
+    def handle_admin_add(ack: Ack, body: dict, respond: Respond) -> None:
+        ack()
+        if not admin_service.is_admin(body["user_id"]):
+            guards.reject_non_admin(respond)
+            return
+        target = _parse_slack_user(body.get("text", "") or "")
+        if target is None:
+            respond(
+                text="형식: `/어드민-추가 @사용자` (Slack 멘션 자동완성 사용)",
+                response_type="ephemeral",
+            )
+            return
+        with session(DB_PATH) as conn:
+            added = admin_service.add_admin(conn, target, added_by=body["user_id"])
+        if added:
+            respond(text=f":white_check_mark: <@{target}> 운영자로 추가됨.", response_type="ephemeral")
+        else:
+            respond(text=f":information_source: <@{target}> 이미 운영자입니다.", response_type="ephemeral")
+
+    @app.command("/어드민-삭제")
+    def handle_admin_remove(ack: Ack, body: dict, respond: Respond) -> None:
+        ack()
+        if not admin_service.is_admin(body["user_id"]):
+            guards.reject_non_admin(respond)
+            return
+        target = _parse_slack_user(body.get("text", "") or "")
+        if target is None:
+            respond(
+                text="형식: `/어드민-삭제 @사용자`",
+                response_type="ephemeral",
+            )
+            return
+        with session(DB_PATH) as conn:
+            ok, reason = admin_service.remove_admin(conn, target)
+        if ok:
+            respond(text=f":wastebasket: <@{target}> 운영자 권한 해제됨.", response_type="ephemeral")
+        else:
+            respond(text=f":no_entry_sign: 제거 실패: {reason}", response_type="ephemeral")
+
+    @app.command("/어드민-목록")
+    def handle_admin_list(ack: Ack, body: dict, respond: Respond) -> None:
+        ack()
+        if not admin_service.is_admin(body["user_id"]):
+            guards.reject_non_admin(respond)
+            return
+        rows = admin_service.list_admins()
+        if not rows:
+            respond(text=":busts_in_silhouette: 운영자 없음 (DB 부트스트랩 실패?).", response_type="ephemeral")
+            return
+        lines = [":busts_in_silhouette: *현재 운영자 목록*"]
+        for r in rows:
+            tag = " :star: (primary)" if r["is_primary"] else ""
+            lines.append(f"• <@{r['slack_user_id']}>{tag}  _added {r['added_at']}_")
+        respond(text="\n".join(lines), response_type="ephemeral")

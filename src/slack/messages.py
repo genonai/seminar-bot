@@ -6,6 +6,11 @@ from typing import Any
 
 from ..config import ADMIN_JJR, CHANNEL_ID
 from ..models import Schedule
+from ..services import admin_service
+
+
+def _primary_admin() -> str:
+    return admin_service.get_primary_admin_id() or ADMIN_JJR
 
 
 WEEKDAY_KO = ["월", "화", "수", "목", "금", "토", "일"]
@@ -26,7 +31,7 @@ def upcoming_schedule(
     name_to_slack: dict[str, str],
 ) -> str:
     if not schedules:
-        return f":calendar: 등록된 다가올 세미나가 없습니다. 운영자(<@{ADMIN_JJR}>)에게 문의해주세요."
+        return f":calendar: 등록된 다가올 세미나가 없습니다. 운영자(<@{_primary_admin()}>)에게 문의해주세요."
 
     lines: list[str] = [":calendar: *다가올 세미나 일정*", ""]
     for s in schedules:
@@ -268,7 +273,7 @@ def replacement_thanks_dm(*, original_date: date, requester: str) -> str:
 
 def escalation_dm() -> str:
     return (
-        f":sos: 대체자 후보 모두 거절했습니다. 진재님(<@{ADMIN_JJR}>)이 수동으로 처리해 주세요. "
+        f":sos: 대체자 후보 모두 거절했습니다. 운영자(<@{_primary_admin()}>)가 수동으로 처리해 주세요. "
         f"필요 시 채널(<#{CHANNEL_ID}>)에 직접 공지 부탁드립니다."
     )
 
