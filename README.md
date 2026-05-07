@@ -69,6 +69,11 @@ Bot Token Scopes:
 - `app_mentions:read` — 멘션 이벤트
 - `channels:read` — **채널 멤버십 sync (없으면 sync 동작 안 함, 봇은 동작)**
 
+Event Subscriptions (Bot Events):
+- `message.im` — 봇 DM 메시지 수신
+- `member_joined_channel` — 누가 세미나 채널 입장 시 자동 sync
+- `member_left_channel` — 누가 세미나 채널 퇴장 시 자동 sync
+
 ## 환경변수 (`.env`)
 
 | 변수 | 설명 |
