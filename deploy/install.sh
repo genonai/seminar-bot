@@ -5,7 +5,10 @@
 # 전제조건:
 #   - /opt/seminar-bot 에 코드가 이미 들어있음 (git clone 또는 rsync)
 #   - /opt/seminar-bot/.env 가 채워져있음 (실제 토큰)
-#   - python3.11+ 설치됨
+#   - python3.11 (또는 python3.12) 설치됨
+#
+# 환경변수 PYTHON 으로 인터프리터 override 가능:
+#   sudo PYTHON=/usr/bin/python3.11 bash deploy/install.sh
 
 set -euo pipefail
 
@@ -13,6 +16,25 @@ REPO_DIR="/opt/seminar-bot"
 DATA_DIR="/var/lib/seminar-bot"
 LOG_DIR="/var/log/seminar-bot"
 SERVICE_NAME="seminar-bot"
+
+# Python 인터프리터 자동 탐지 (3.11 우선)
+if [[ -z "${PYTHON:-}" ]]; then
+  for cand in python3.13 python3.12 python3.11 python3; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      ver=$("$cand" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+      major=${ver%.*}; minor=${ver#*.}
+      if [[ "$major" -ge 3 ]] && [[ "$minor" -ge 11 ]]; then
+        PYTHON=$(command -v "$cand")
+        break
+      fi
+    fi
+  done
+fi
+if [[ -z "${PYTHON:-}" ]]; then
+  echo "❌ python3.11+ 를 찾지 못함. 'sudo dnf install -y python3.11' 후 재시도."
+  exit 1
+fi
+echo "▶ Python: $PYTHON ($($PYTHON --version))"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "❌ root로 실행해야 함: sudo bash $0"
@@ -23,10 +45,11 @@ echo "▶ 디렉토리 준비"
 mkdir -p "${DATA_DIR}" "${LOG_DIR}"
 chown -R kube:kube "${DATA_DIR}" "${LOG_DIR}" "${REPO_DIR}"
 
-echo "▶ Python venv + 의존성"
+echo "▶ Python venv + 의존성 (기존 .venv 있으면 제거)"
 cd "${REPO_DIR}"
-sudo -u kube python3 -m venv .venv
-sudo -u kube .venv/bin/pip install --upgrade pip wheel
+rm -rf .venv
+sudo -u kube "$PYTHON" -m venv .venv
+sudo -u kube .venv/bin/pip install --upgrade pip wheel setuptools
 sudo -u kube .venv/bin/pip install -e .
 
 echo "▶ DB 초기화 (멱등)"
