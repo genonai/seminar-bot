@@ -17,10 +17,14 @@ SLACK_BOT_TOKEN: str | None = os.getenv("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN: str | None = os.getenv("SLACK_APP_TOKEN")
 SLACK_SIGNING_SECRET: str | None = os.getenv("SLACK_SIGNING_SECRET")
 
-# LLM (OpenAI 호환 — OpenRouter 등 provider-agnostic)
+# LLM / VLM (OpenAI 호환 — OpenRouter 등 provider-agnostic)
 LLM_API_KEY: str | None = os.getenv("LLM_API_KEY")
 LLM_API_BASE_URL: str = os.getenv("LLM_API_BASE_URL", "https://openrouter.ai/api/v1")
 LLM_MODEL: str = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4.5")
+VLM_MODEL: str = os.getenv("VLM_MODEL", "anthropic/claude-sonnet-4.5")
+
+# Weaviate (vector DB) — 181 서버에 이미 떠있는 인스턴스 사용
+WEAVIATE_URL: str = os.getenv("WEAVIATE_URL", "http://localhost:8080")
 
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", "C0B1XSR0YNN")
 DB_PATH: Path = Path(os.getenv("DB_PATH", "./seminar.db"))

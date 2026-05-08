@@ -15,7 +15,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from .config import LLM_API_BASE_URL, LLM_API_KEY, LLM_MODEL
+from .config import LLM_API_BASE_URL, LLM_API_KEY, LLM_MODEL, VLM_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -70,11 +70,12 @@ ROUTE_INTENT_TOOL: dict[str, Any] = {
             "properties": {
                 "intent": {
                     "type": "string",
-                    "enum": ["defer", "preference", "schedule_question", "other"],
+                    "enum": ["defer", "preference", "schedule_question", "material_question", "other"],
                     "description": (
-                        "defer: 발표 연기 의사 (예: '5/14 못해', '휴가라 미뤄줘'). "
-                        "preference: 평상시 선호도 등록/수정 (예: '월말은 항상 빼줘', '2부 선호'). "
-                        "schedule_question: 일정/발표자 질의 (예: '내 차례 언제?', '5/21 누구야?'). "
+                        "defer: 발표 연기 의사. "
+                        "preference: 평상시 선호도 등록/수정. "
+                        "schedule_question: 일정/발표자 자체에 대한 단순 조회 (예: '내 차례 언제?'). "
+                        "material_question: 발표 *자료 내용*에 대한 질문 (예: 'X가 어떤 모델 썼어?', 'LLM agent 발표 요약'). "
                         "other: 인사/잡담/모호한 메시지."
                     ),
                 },
@@ -248,6 +249,144 @@ def classify_intent(user_message: str) -> IntentResult:
     )
 
 
+def vlm_extract_page(image_b64: str, *, page_number: int, hint: str = "") -> dict[str, Any]:
+    """발표 자료 한 페이지(이미지)를 VLM으로 분석해 구조화된 결과 반환.
+
+    Returns: {
+      text_content: str,         # 페이지에 적힌 텍스트 (정확히)
+      visual_description: str,   # 이미지/차트/다이어그램 설명
+      page_summary: str,         # 1-2문장 페이지 요약
+      key_points: [str],         # bullet point
+      entities: [{name, type}],  # 인물/모델/데이터셋/용어 등
+    }
+    """
+    sys = (
+        "당신은 발표 자료(슬라이드 PDF) 분석 전문가다. "
+        "주어진 페이지를 정확히 읽고 구조화된 JSON으로 반환한다. "
+        "한국어 발표라면 결과도 한국어로. "
+        "JSON 외 다른 텍스트는 포함하지 않는다."
+    )
+    user_text = (
+        f"다음은 발표 자료 {page_number}쪽 이미지다."
+        + (f"\n맥락: {hint}" if hint else "")
+        + "\n\n다음 JSON 스키마로 답하라:\n"
+        + json.dumps({
+            "text_content": "string (페이지 내 모든 텍스트, 줄바꿈 보존)",
+            "visual_description": "string (도표/차트/다이어그램 있으면 설명, 없으면 빈 문자열)",
+            "page_summary": "string (1-2문장 한국어)",
+            "key_points": ["string", "..."],
+            "entities": [{"name": "string", "type": "person|model|dataset|tool|concept|paper|other"}],
+        }, ensure_ascii=False, indent=2)
+    )
+    resp = _client().chat.completions.create(
+        model=VLM_MODEL,
+        messages=[
+            {"role": "system", "content": sys},
+            {"role": "user", "content": [
+                {"type": "text", "text": user_text},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+            ]},
+        ],
+        temperature=0.1,
+        response_format={"type": "json_object"},
+    )
+    raw = resp.choices[0].message.content or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        log.warning("VLM page %d JSON 파싱 실패: %s — 원문 일부 보존", page_number, e)
+        data = {"text_content": raw[:2000], "visual_description": "", "page_summary": "", "key_points": [], "entities": []}
+    # 안전한 기본값
+    data.setdefault("text_content", "")
+    data.setdefault("visual_description", "")
+    data.setdefault("page_summary", "")
+    data.setdefault("key_points", [])
+    data.setdefault("entities", [])
+    return data
+
+
+def extract_document_metadata(
+    *, page_summaries: list[dict[str, Any]], presenter: str, seminar_date: str, user_title_hint: str
+) -> dict[str, Any]:
+    """페이지별 결과를 합쳐서 문서 단위 메타 + 엔티티 카탈로그 + 관계 추출."""
+    pages_text = []
+    for p in page_summaries:
+        pages_text.append(
+            f"[p.{p['page_number']}] {p['page_summary']}\n"
+            f"  text: {p['text_content'][:500]}\n"
+            f"  visual: {p['visual_description']}\n"
+            f"  entities: {p['entities']}"
+        )
+    joined = "\n\n".join(pages_text)
+
+    sys = (
+        "당신은 발표 자료에서 메타데이터와 지식 그래프를 추출하는 분석가다. "
+        "JSON으로만 응답하라."
+    )
+    user = (
+        f"발표자: {presenter}\n세미나 날짜: {seminar_date}\n"
+        + (f"사용자가 입력한 제목 힌트: {user_title_hint}\n" if user_title_hint else "")
+        + f"\n페이지 분석 결과:\n{joined}\n\n"
+        + "다음 JSON으로 답하라:\n"
+        + json.dumps({
+            "title": "string (전체 발표 제목, 사용자 힌트가 있으면 우선 사용)",
+            "summary": "string (3-5문장 한국어 요약)",
+            "tags": ["string", "..."],   # 5-10개 토픽 태그 (예: 'LLM agent', 'continual learning')
+            "entities": [
+                {"name": "string", "type": "person|model|dataset|tool|concept|paper|company|other",
+                 "description": "string (1문장)"}
+            ],
+            "relations": [
+                {"subject": "string", "predicate": "string", "object": "string"}
+            ],
+        }, ensure_ascii=False, indent=2)
+    )
+    resp = _client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+    raw = resp.choices[0].message.content or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = {}
+    data.setdefault("title", user_title_hint or f"{presenter} {seminar_date} 발표")
+    data.setdefault("summary", "")
+    data.setdefault("tags", [])
+    data.setdefault("entities", [])
+    data.setdefault("relations", [])
+    return data
+
+
+def synthesize_rag_answer(
+    *, user_question: str, retrieved: list[dict[str, Any]]
+) -> str:
+    """Weaviate에서 검색된 페이지 청크 + 사용자 질문 → LLM 답변 (출처 포함)."""
+    chunks_text = []
+    for i, r in enumerate(retrieved, 1):
+        chunks_text.append(
+            f"[자료 {i}] {r.get('presenter','')} / {r.get('seminar_date','')} / "
+            f"p.{r.get('page_number','?')} / 제목: {r.get('title','')}\n"
+            f"{r.get('content','')[:1500]}"
+        )
+    chunks = "\n\n".join(chunks_text) if chunks_text else "(검색 결과 없음)"
+    sys = (
+        "당신은 사내 주간 세미나 자료 기반 질의응답 봇이다. "
+        "주어진 자료에 근거해서만 답변하고, 자료에 없으면 '자료에서 확인되지 않습니다'라고 답한다. "
+        "한국어로, 짧고 정확하게. "
+        "답변 끝에 '출처:' 섹션으로 [자료 N: 발표자 / 날짜 / 쪽] 형식으로 1-3개 인용."
+    )
+    user = f"질문: {user_question}\n\n참고 자료:\n{chunks}"
+    resp = _client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+        temperature=0.2,
+    )
+    return (resp.choices[0].message.content or "").strip()
+
+
 def answer_schedule_question(
     *, member_name: str, today: str, schedule_text: str, user_assignment: str, user_message: str
 ) -> str:
@@ -315,7 +454,8 @@ route_intent tool을 반드시 한 번 호출한다.
 분류 가이드
 - defer: 본인 발표를 연기하고 싶다는 의사가 보임. "못해", "휴가", "미뤄줘", "변경", 날짜 + 부정문 등.
 - preference: 평상시 발표 선호 등록 (예: "월말 회피", "1부 선호", "5월 둘째주 휴가 예정")
-- schedule_question: 일정 자체에 대한 단순 질문 (조회). 변경 의사 없음.
+- schedule_question: 일정/발표자에 대한 단순 조회. 변경 의사 없음. (예: '내 차례 언제?', '5/21 누구?')
+- material_question: 발표 *자료 내용*에 대한 질문. 발표 자료에 들어간 모델/방법/숫자/요약 등. (예: 'X가 어떤 모델 썼어?', '지난주 발표 요약', 'LLM agent 자료에서 핵심 포인트')
 - other: 인사, 잡담, 봇 사용법 질문, 모호하면 여기. fallback_reply에 친근하게 답한다."""
 
 

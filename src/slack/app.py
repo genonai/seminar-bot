@@ -4,7 +4,7 @@ from __future__ import annotations
 from slack_bolt import App
 
 from ..config import SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
-from . import actions, commands, dm, events
+from . import actions, commands, dm, events, view_handlers
 
 
 def build_app() -> App:
@@ -17,4 +17,5 @@ def build_app() -> App:
     dm.register(app)
     actions.register(app)
     events.register(app)
+    view_handlers.register(app)
     return app

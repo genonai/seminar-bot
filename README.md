@@ -68,6 +68,7 @@ Bot Token Scopes:
 - `users:read` — 유저 정보 조회
 - `app_mentions:read` — 멘션 이벤트
 - `channels:read` — **채널 멤버십 sync (없으면 sync 동작 안 함, 봇은 동작)**
+- `files:read` — **`/제출` 모달로 업로드된 PDF 다운로드**
 
 Event Subscriptions (Bot Events):
 - `message.im` — 봇 DM 메시지 수신

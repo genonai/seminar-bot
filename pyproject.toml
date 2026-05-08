@@ -10,6 +10,9 @@ dependencies = [
   "python-dotenv>=1.0",
   "openai>=1.50",
   "tzdata>=2024.1",
+  "pypdfium2>=4.30",          # PDF → PNG 렌더링, 시스템 poppler 의존성 X
+  "weaviate-client>=4.9",     # vector DB
+  "httpx>=0.27",              # Slack 파일 다운로드
 ]
 
 [project.optional-dependencies]

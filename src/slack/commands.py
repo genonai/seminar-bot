@@ -12,11 +12,12 @@ from ..db import session
 from ..services import (
     admin_service,
     cycle_service,
+    defer_service,
     member_service,
     notification_service,
     schedule_service,
 )
-from . import flows, guards, messages
+from . import flows, guards, messages, views
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +133,37 @@ def register(app: App) -> None:
             ),
             response_type="ephemeral",
         )
+
+    @app.command("/제출")
+    def handle_submit(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
+        ack()
+        log.info("/제출 user=%s channel=%s", body.get("user_id"), body.get("channel_id"))
+        if not guards.in_seminar_channel(body):
+            guards.reject_wrong_channel(respond)
+            return
+        if not guards.is_member_or_admin(body["user_id"]):
+            guards.reject_non_member(respond)
+            return
+
+        today = date.today()
+        with session(DB_PATH) as conn:
+            assignment = defer_service.find_requester_assignment(conn, body["user_id"], today)
+        if assignment is None:
+            respond(
+                text=":information_source: 다가올 발표 일정이 없어 자료 제출 대상이 아닙니다.",
+                response_type="ephemeral",
+            )
+            return
+        seminar_date, presenter = assignment
+
+        try:
+            client.views_open(
+                trigger_id=body["trigger_id"],
+                view=views.submission_modal(seminar_date, presenter),
+            )
+        except Exception as e:
+            log.exception("/제출 modal 열기 실패")
+            respond(text=f":x: 모달 열기 실패: {e}", response_type="ephemeral")
 
     # ─── 운영자 관리 ──────────────────────────────────────────
     @app.command("/어드민-추가")

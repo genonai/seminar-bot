@@ -19,15 +19,134 @@ from ..services import (
     admin_service,
     defer_service,
     draft_service,
+    file_storage,
+    ingestion_service,
     member_service,
     preference_service,
     schedule_service,
+    submission_service,
+    vector_service,
 )
 
 
 def _primary_admin() -> str:
     """현재 primary admin slack id (DB 우선, 없으면 env config 폴백)."""
     return admin_service.get_primary_admin_id() or ADMIN_JJR
+
+
+# ─────────────────────────────────────────────────────────────
+# /제출 흐름 — 모달 → 파일 다운로드 → 백그라운드 ingestion → 채널 공지
+# ─────────────────────────────────────────────────────────────
+def process_submission_async(
+    client: WebClient,
+    *,
+    slack_user_id: str,
+    presenter: str,
+    seminar_date,                   # date
+    file_id: str,
+    title_hint: str,
+) -> None:
+    """별도 thread에서 호출됨. Slack ack는 호출자가 이미 처리.
+    실패해도 raise하지 말고 사용자에게 DM으로 알림."""
+    dm_channel = open_dm(client, slack_user_id)
+
+    # 1) 파일 다운로드
+    try:
+        client.chat_postMessage(channel=dm_channel, text=":hourglass_flowing_sand: 자료 다운로드 중...")
+        file_path, original_name = file_storage.download_slack_file(
+            client, file_id=file_id, presenter=presenter, seminar_date=seminar_date,
+        )
+    except Exception as e:
+        log.exception("submission 파일 다운로드 실패")
+        client.chat_postMessage(channel=dm_channel, text=f":x: 다운로드 실패: {e}")
+        return
+
+    # 2) DB row 생성 + 처리
+    submission_id: int | None = None
+    try:
+        with session(DB_PATH) as conn:
+            submission_id = submission_service.create_pending(
+                conn,
+                presenter=presenter,
+                seminar_date=seminar_date,
+                file_path=str(file_path),
+                file_name=original_name,
+                slack_file_id=file_id,
+            )
+
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=":mag: VLM 분석 + 지식 추출 시작 (페이지 수에 따라 1-3분 소요).",
+        )
+
+        with session(DB_PATH) as conn:
+            result = ingestion_service.ingest_submission(conn, submission_id, title_hint=title_hint)
+
+    except Exception as e:
+        log.exception("submission %s ingestion 실패", submission_id)
+        if submission_id is not None:
+            with session(DB_PATH) as conn:
+                submission_service.mark_failed(conn, submission_id, str(e))
+        client.chat_postMessage(channel=dm_channel, text=f":x: 처리 실패: {e}")
+        return
+
+    # 3) 사용자 DM 완료
+    title = result.get("title") or original_name
+    summary = result.get("summary") or ""
+    page_count = result.get("page_count", 0)
+    tag_text = ", ".join(f"`{t}`" for t in (result.get("tags") or [])[:8])
+    entity_count = len(result.get("entities") or [])
+
+    client.chat_postMessage(
+        channel=dm_channel,
+        text=(
+            f":white_check_mark: *처리 완료* — _{title}_ ({page_count}p)\n"
+            f"태그: {tag_text or '없음'}  |  엔티티 {entity_count}개 추출\n"
+            f"이제 멤버들이 봇 DM에 자료 관련 질문을 던지면 답변할 수 있습니다."
+        ),
+    )
+
+    # 4) 채널 공지
+    announce_channel_submission(
+        client, presenter=presenter, seminar_date=seminar_date,
+        title=title, summary=summary, tags=result.get("tags") or [],
+        page_count=page_count, slack_file_id=file_id, submission_id=submission_id,
+    )
+
+
+def announce_channel_submission(
+    client: WebClient,
+    *,
+    presenter: str,
+    seminar_date,
+    title: str,
+    summary: str,
+    tags: list[str],
+    page_count: int,
+    slack_file_id: str,
+    submission_id: int,
+) -> None:
+    """ingest 완료 직후 채널에 자료 공지."""
+    tag_text = " ".join(f"`{t}`" for t in tags[:6]) if tags else ""
+    text_lines = [
+        f":books: *{presenter}*님 발표 자료 제출 — *{seminar_date.isoformat()} (목)*",
+        f"*{title}* ({page_count}쪽)",
+    ]
+    if summary:
+        text_lines.append("")
+        text_lines.append(f"> {summary}")
+    if tag_text:
+        text_lines.append("")
+        text_lines.append(tag_text)
+    text_lines.append("")
+    text_lines.append(":speech_balloon: 봇 DM에 자료 관련 질문하시면 답변합니다.")
+
+    resp = client.chat_postMessage(channel=CHANNEL_ID, text="\n".join(text_lines))
+    # 슬랙이 file_id 첨부를 채널에 가시화: file_remote 또는 share. 파일 자체는 발표자가 채널에 공유하면 됨.
+    # 우리 봇이 첨부 재공유하려면 files.share API + private file conversion 필요. 여기선 텍스트만.
+
+    with session(DB_PATH) as conn:
+        submission_service.set_announce_ts(conn, submission_id, resp["ts"])
 from . import messages
 
 log = logging.getLogger(__name__)
@@ -177,9 +296,11 @@ def handle_dm_message(
             _begin_preference_in_dm(client, conn, slack_user_id, channel, text)
         elif intent.intent == "schedule_question":
             _answer_schedule(client, conn, slack_user_id, channel, text, today)
+        elif intent.intent == "material_question":
+            _answer_material(client, channel, text)
         else:
             reply = intent.fallback_reply or (
-                "어떤 도움이 필요하신가요? 발표 연기, 선호도 등록, 일정 조회 같은 걸 도와드려요."
+                "어떤 도움이 필요하신가요? 발표 연기, 선호도 등록, 일정 조회, 자료 질문 같은 걸 도와드려요."
             )
             client.chat_postMessage(channel=channel, text=reply)
 
@@ -258,6 +379,30 @@ def _answer_schedule(
         user_assignment=user_assignment,
         user_message=text,
     )
+    if answer:
+        client.chat_postMessage(channel=dm_channel, text=answer)
+
+
+def _answer_material(client: WebClient, dm_channel: str, text: str) -> None:
+    """RAG: Weaviate 검색 → LLM 합성 → DM 회신."""
+    try:
+        retrieved = vector_service.search(text, limit=5)
+    except Exception as e:
+        log.exception("vector search 실패")
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=f":warning: 자료 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요. ({e})",
+        )
+        return
+
+    if not retrieved:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=":books: 아직 인입된 발표 자료가 없거나 관련된 자료를 찾지 못했습니다.",
+        )
+        return
+
+    answer = llm_service.synthesize_rag_answer(user_question=text, retrieved=retrieved)
     if answer:
         client.chat_postMessage(channel=dm_channel, text=answer)
 

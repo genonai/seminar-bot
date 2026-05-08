@@ -79,8 +79,32 @@ SCHEMA: tuple[str, ...] = (
       is_primary      INTEGER NOT NULL DEFAULT 0
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS submissions (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      presenter       TEXT NOT NULL,                  -- 멤버 이름
+      seminar_date    TEXT NOT NULL,                  -- YYYY-MM-DD
+      file_path       TEXT NOT NULL,                  -- 호스트 디스크 경로
+      file_name       TEXT NOT NULL,                  -- 원본 파일명
+      slack_file_id   TEXT,                           -- Slack F... id
+      page_count      INTEGER,
+      title           TEXT,                           -- LLM 추출 제목
+      summary         TEXT,                           -- LLM 추출 요약
+      tags            TEXT,                           -- JSON list
+      entities        TEXT,                           -- JSON list (entity 카탈로그)
+      relations       TEXT,                           -- JSON list (entity 관계)
+      status          TEXT NOT NULL DEFAULT 'pending',
+        -- pending / processing / ingested / failed
+      error_message   TEXT,
+      submitted_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      ingested_at     DATETIME,
+      announce_ts     TEXT                            -- 채널 공지 메시지 ts (재게시 방지)
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_schedule_cycle ON schedule(cycle_id)",
     "CREATE INDEX IF NOT EXISTS idx_defer_status ON defer_requests(status)",
+    "CREATE INDEX IF NOT EXISTS idx_submissions_seminar ON submissions(seminar_date)",
+    "CREATE INDEX IF NOT EXISTS idx_submissions_presenter ON submissions(presenter)",
 )
 
 
