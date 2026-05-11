@@ -32,24 +32,21 @@ def _client() -> OpenAI:
 
 
 def _resolve_model() -> str:
-    """모델 id 결정. env에 명시 있으면 그거 (단 'bge-m3' 같은 placeholder는 무시),
-    아니면 GET /v1/models 첫 결과를 캐싱."""
+    """EMBEDDING_MODEL env 값이 있으면 그대로 사용. 비어있으면 /v1/models 첫 결과로 폴백."""
     global _model_cache
     if _model_cache:
         return _model_cache
     with _model_lock:
         if _model_cache:
             return _model_cache
-        # GenOS는 model id 가 serving_rev_id (e.g. '559') 형태. EMBEDDING_MODEL이
-        # 그 형태(숫자)면 그대로 신뢰, 아니면 동적 발견.
-        if EMBEDDING_MODEL and EMBEDDING_MODEL.isdigit():
+        if EMBEDDING_MODEL:
             _model_cache = EMBEDDING_MODEL
             return _model_cache
         resp = _client().models.list()
         if not resp.data:
-            raise RuntimeError("GenOS /v1/models 응답에 model 없음")
+            raise RuntimeError("/v1/models 응답에 model 없음 — EMBEDDING_MODEL 직접 명시 권장")
         _model_cache = resp.data[0].id
-        log.info("embedding model resolved: %s", _model_cache)
+        log.info("embedding model auto-resolved: %s", _model_cache)
         return _model_cache
 
 

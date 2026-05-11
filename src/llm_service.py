@@ -167,24 +167,22 @@ _vlm_model_cache: str | None = None
 
 
 def _resolve_vlm_model() -> str:
-    """VLM_MODEL이 GenOS 숫자 id ('689' 등) 또는 비어있으면 /v1/models 첫 결과로 해석."""
+    """VLM_MODEL env 값이 있으면 그대로. 비어있으면 /v1/models 첫 결과로 폴백."""
     global _vlm_model_cache
     if _vlm_model_cache:
         return _vlm_model_cache
-    if VLM_MODEL and not VLM_MODEL.isdigit() and "/" in VLM_MODEL:
-        # OpenRouter 형식 (provider/model-name)
+    if VLM_MODEL:
         _vlm_model_cache = VLM_MODEL
         return _vlm_model_cache
-    # GenOS 또는 비어있음 → models.list
     try:
         resp = _vlm_client().models.list()
         if resp.data:
             _vlm_model_cache = resp.data[0].id
-            log.info("VLM model resolved: %s", _vlm_model_cache)
+            log.info("VLM model auto-resolved: %s", _vlm_model_cache)
             return _vlm_model_cache
     except Exception as e:
-        log.warning("VLM models.list 실패 (%s), VLM_MODEL=%s 그대로 사용", e, VLM_MODEL)
-    _vlm_model_cache = VLM_MODEL
+        log.warning("VLM models.list 실패 (%s)", e)
+    _vlm_model_cache = ""
     return _vlm_model_cache
 
 
