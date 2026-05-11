@@ -42,11 +42,7 @@ def upcoming_schedule(
         marker = ":star:" if viewer_in_slot else "  "
         slot_1 = s.slot_1 or "_미정_"
         slot_2 = s.slot_2 or "_미정_"
-        t1 = f" — _{s.slot_1_topic}_" if s.slot_1_topic else ""
-        t2 = f" — _{s.slot_2_topic}_" if s.slot_2_topic else ""
-        lines.append(f"{marker} *{fmt_date(s.date)}*")
-        lines.append(f"     1부: {slot_1}{t1}")
-        lines.append(f"     2부: {slot_2}{t2}")
+        lines.append(f"{marker} *{fmt_date(s.date)}* — 1부: {slot_1} / 2부: {slot_2}")
     return "\n".join(lines)
 
 

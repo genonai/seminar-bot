@@ -217,6 +217,64 @@ def register(app: App) -> None:
             log.exception("/제출 modal 열기 실패")
             respond(text=f":x: 모달 열기 실패: {e}", response_type="ephemeral")
 
+    @app.command("/세미나-토픽-알림")
+    def handle_topic_remind(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
+        """운영자 한정. 다가올 첫 세미나의 토픽 미등록 발표자에게 DM 발송."""
+        ack()
+        user_id = body["user_id"]
+        log.info("/세미나-토픽-알림 user=%s channel=%s", user_id, body.get("channel_id"))
+        if not admin_service.is_admin(user_id):
+            guards.reject_non_admin(respond)
+            return
+        if not guards.in_seminar_channel(body):
+            guards.reject_wrong_channel(respond)
+            return
+
+        today = date.today()
+        with session(DB_PATH) as conn:
+            next_s = schedule_service.get_next_seminar(conn, today)
+            if next_s is None:
+                respond(text=":information_source: 다가올 일정이 없습니다.", response_type="ephemeral")
+                return
+
+            sent: list[str] = []
+            already: list[str] = []
+            for slot_name, topic, slot_label in [
+                (next_s.slot_1, next_s.slot_1_topic, "1부"),
+                (next_s.slot_2, next_s.slot_2_topic, "2부"),
+            ]:
+                if not slot_name:
+                    continue
+                if topic:
+                    already.append(f"{slot_label} {slot_name} (이미 등록)")
+                    continue
+                m = member_service.get_by_name(conn, slot_name)
+                if m is None:
+                    continue
+                try:
+                    dm = client.conversations_open(users=m.slack_user_id)["channel"]["id"]
+                    client.chat_postMessage(
+                        channel=dm,
+                        text=(
+                            f":memo: {next_s.date.month}/{next_s.date.day}(목) *{slot_label}* 발표 토픽이 아직 등록 안 됐어요.\n"
+                            "이번에 다룰 내용을 한 줄로 봇 DM에 보내주시면 자동 저장됩니다.\n"
+                            "예: _\"LLM agent ReAct vs Reflexion 비교\"_"
+                        ),
+                    )
+                    sent.append(f"{slot_label} {slot_name}")
+                    log.info("topic remind DM → %s for %s", m.name, next_s.date)
+                except Exception as e:
+                    log.warning("topic remind DM → %s 실패: %s", m.name, e)
+
+        msg_parts = [f":mailbox: 다가올 세미나 *{next_s.date.isoformat()}* 기준 토픽 알림 발송 결과:"]
+        if sent:
+            msg_parts.append(":bell: DM 발송: " + ", ".join(sent))
+        if already:
+            msg_parts.append(":white_check_mark: 등록 완료: " + ", ".join(already))
+        if not sent and not already:
+            msg_parts.append("발표자 배정 없음")
+        respond(text="\n".join(msg_parts), response_type="ephemeral")
+
     # ─── 운영자 관리 ──────────────────────────────────────────
     @app.command("/어드민-추가")
     def handle_admin_add(ack: Ack, body: dict, respond: Respond) -> None:
