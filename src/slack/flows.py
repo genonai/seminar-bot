@@ -385,11 +385,31 @@ def _answer_schedule(
     member = member_service.get_by_slack_id(conn, slack_user_id)
     upcoming = schedule_service.get_upcoming(conn, today=today, limit=10)
 
-    schedule_text = "\n".join([
-        f"- {s.date.isoformat()} ({messages.WEEKDAY_KO[s.date.weekday()]}): "
-        f"1부 {s.slot_1 or '미정'} / 2부 {s.slot_2 or '미정'}"
-        for s in upcoming
-    ]) or "(일정 없음)"
+    def _slot_str(name: str | None, topic: str | None) -> str:
+        if not name:
+            return "_빈슬롯_"
+        if topic:
+            return f"{name} (토픽: {topic})"
+        return f"{name} (토픽 미등록)"
+
+    lines: list[str] = []
+    for s in upcoming:
+        lines.append(
+            f"- {s.date.isoformat()} ({messages.WEEKDAY_KO[s.date.weekday()]}): "
+            f"1부 {_slot_str(s.slot_1, s.slot_1_topic)} / "
+            f"2부 {_slot_str(s.slot_2, s.slot_2_topic)}"
+            + (f"  📌 {s.notes}" if s.notes else "")
+        )
+    schedule_text = "\n".join(lines) or "(일정 없음)"
+
+    # 토픽 등록 통계 (질문이 '토픽 몇 명?' 류일 때 유용)
+    topic_filled = sum(
+        1 for s in upcoming for tp in (s.slot_1_topic, s.slot_2_topic) if tp
+    )
+    topic_slots = sum(
+        1 for s in upcoming for nm in (s.slot_1, s.slot_2) if nm
+    )
+    schedule_text += f"\n\n토픽 등록 통계: {topic_filled}/{topic_slots} 슬롯"
 
     user_assignment = "없음"
     if member is not None:
