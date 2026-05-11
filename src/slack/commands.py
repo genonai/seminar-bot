@@ -134,6 +134,40 @@ def register(app: App) -> None:
             response_type="ephemeral",
         )
 
+    @app.command("/세미나-토픽")
+    def handle_topic(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
+        ack()
+        user_id = body["user_id"]
+        log.info("/세미나-토픽 user=%s channel=%s", user_id, body.get("channel_id"))
+        if not guards.in_seminar_channel(body):
+            guards.reject_wrong_channel(respond)
+            return
+        if not guards.is_member_or_admin(user_id):
+            guards.reject_non_member(respond)
+            return
+
+        today = date.today()
+        with session(DB_PATH) as conn:
+            assignment = defer_service.find_requester_assignment(conn, user_id, today)
+            if assignment is None:
+                respond(
+                    text=":information_source: 다가올 발표 일정이 없어 토픽 등록 대상이 아닙니다.",
+                    response_type="ephemeral",
+                )
+                return
+            seminar_date, presenter = assignment
+            s = schedule_service.get_by_date(conn, seminar_date)
+            current_topic = (s.topic_for(presenter) if s else "") or ""
+
+        try:
+            client.views_open(
+                trigger_id=body["trigger_id"],
+                view=views.topic_modal(seminar_date, presenter, current_topic),
+            )
+        except Exception as e:
+            log.exception("/세미나-토픽 modal 열기 실패")
+            respond(text=f":x: 모달 열기 실패: {e}", response_type="ephemeral")
+
     @app.command("/제출")
     def handle_submit(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
         ack()

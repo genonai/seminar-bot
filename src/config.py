@@ -39,6 +39,14 @@ EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "")
 EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))
 
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", "C0B1XSR0YNN")
+
+# 자동 공지를 동시에 보낼 채널 ID 리스트 (CSV). 비워두거나 미설정 시 CHANNEL_ID 1곳만.
+# 예: 'C0B1XSR0YNN,C09P52U025S' → 세미나 채널 + 본사-engineer-업무관리.
+_broadcast_raw = os.getenv("BROADCAST_CHANNELS", "")
+BROADCAST_CHANNELS: tuple[str, ...] = (
+    tuple(c.strip() for c in _broadcast_raw.split(",") if c.strip())
+    or (CHANNEL_ID,)
+)
 DB_PATH: Path = Path(os.getenv("DB_PATH", "./seminar.db"))
 TIMEZONE: str = os.getenv("TIMEZONE", "Asia/Seoul")
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

@@ -111,6 +111,8 @@ SCHEMA: tuple[str, ...] = (
 # 점진적 마이그레이션 — (table, column, full DDL after ADD COLUMN)
 MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("members", "is_active", "INTEGER NOT NULL DEFAULT 1"),
+    ("schedule", "slot_1_topic", "TEXT"),
+    ("schedule", "slot_2_topic", "TEXT"),
 )
 
 

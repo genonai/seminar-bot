@@ -13,7 +13,7 @@ from typing import Any
 from slack_sdk import WebClient
 
 from .. import llm_service
-from ..config import ADMIN_JJR, CHANNEL_ID, DB_PATH
+from ..config import ADMIN_JJR, BROADCAST_CHANNELS, CHANNEL_ID, DB_PATH
 from ..db import session
 from ..models import Preferences
 from ..services import (
@@ -145,12 +145,19 @@ def announce_channel_submission(
     text_lines.append("")
     text_lines.append(":speech_balloon: 봇 DM에 자료 관련 질문하시면 답변합니다.")
 
-    resp = client.chat_postMessage(channel=CHANNEL_ID, text="\n".join(text_lines))
-    # 슬랙이 file_id 첨부를 채널에 가시화: file_remote 또는 share. 파일 자체는 발표자가 채널에 공유하면 됨.
-    # 우리 봇이 첨부 재공유하려면 files.share API + private file conversion 필요. 여기선 텍스트만.
+    text = "\n".join(text_lines)
+    primary_ts: str | None = None
+    for ch in BROADCAST_CHANNELS:
+        try:
+            resp = client.chat_postMessage(channel=ch, text=text)
+            if primary_ts is None:
+                primary_ts = resp["ts"]
+        except Exception as e:
+            log.warning("submission announce → %s 실패: %s", ch, e)
 
-    with session(DB_PATH) as conn:
-        submission_service.set_announce_ts(conn, submission_id, resp["ts"])
+    if primary_ts:
+        with session(DB_PATH) as conn:
+            submission_service.set_announce_ts(conn, submission_id, primary_ts)
 from . import messages
 
 log = logging.getLogger(__name__)
@@ -313,6 +320,8 @@ def handle_dm_message(
             _answer_schedule(client, conn, slack_user_id, channel, text, today)
         elif intent.intent == "material_question":
             _answer_material(client, channel, text, prefetched_hits=prefetch_hits)
+        elif intent.intent == "topic_registration":
+            _register_topic_from_dm(client, conn, slack_user_id, channel, text, today)
         else:
             reply = intent.fallback_reply or (
                 "어떤 도움이 필요하신가요? 발표 연기, 선호도 등록, 일정 조회, 자료 질문 같은 걸 도와드려요."
@@ -400,6 +409,55 @@ def _answer_schedule(
     )
     if answer:
         client.chat_postMessage(channel=dm_channel, text=answer)
+
+
+def _register_topic_from_dm(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, text: str, today: date
+) -> None:
+    """DM 자연어로 토픽 등록. ('내 토픽은 X', '이번에 Y 발표할게요')"""
+    assignment = defer_service.find_requester_assignment(conn, slack_user_id, today)
+    if assignment is None:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=":information_source: 다가올 발표 일정이 없어 토픽 등록 대상이 아닙니다.",
+        )
+        return
+    seminar_date, presenter = assignment
+
+    # 메시지에서 토픽 본문만 추출 ("내 토픽은 X" → "X")
+    topic = _extract_topic(text)
+    if not topic:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text="토픽을 어떻게 적을지 한 줄로 알려주세요. 예: _\"내 토픽은 LLM agent ReAct vs Reflexion 비교\"_",
+        )
+        return
+
+    ok = schedule_service.set_topic(conn, seminar_date, presenter, topic)
+    if ok:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=f":white_check_mark: 토픽 저장됨 — *{seminar_date.isoformat()}*: _{topic}_",
+        )
+    else:
+        client.chat_postMessage(channel=dm_channel, text=":x: 토픽 저장 실패. 운영자에게 문의해주세요.")
+
+
+def _extract_topic(text: str) -> str:
+    """간단한 휴리스틱으로 자연어 메시지에서 토픽 본문 추출."""
+    import re
+    patterns = [
+        r"내\s*토픽은\s*[:：]?\s*(.+)$",
+        r"이번\s*토픽\s*[:：]?\s*(.+)$",
+        r"이번에\s+(.+?)(?:\s*발표\s*할게요|\s*발표\s*하려고|\s*해보려고)",
+        r"(?:발표\s*주제|주제)는\s*[:：]?\s*(.+)$",
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+    # 패턴 매칭 안 되면 전체 메시지를 토픽으로 (LLM이 topic_registration 분류했으므로 의도는 명확)
+    return text.strip()
 
 
 def _answer_material(
@@ -725,9 +783,9 @@ def _finalize(client: WebClient, conn, defer_id: int) -> None:
     requester_member = member_service.get_by_name(conn, d.requester)
     rep_member = member_service.get_by_name(conn, d.replacement) if d.replacement else None
 
-    # 채널 공지
-    client.chat_postMessage(
-        channel=CHANNEL_ID,
+    # 채널 공지 (BROADCAST_CHANNELS 전체)
+    notification_service.broadcast(
+        client,
         text=messages.channel_announcement(
             requester=d.requester, replacement=d.replacement or "",
             original_date=d.original_date,

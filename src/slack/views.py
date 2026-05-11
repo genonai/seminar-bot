@@ -5,6 +5,46 @@ import json
 from datetime import date
 
 
+def topic_modal(seminar_date: date, presenter: str, current_topic: str = "") -> dict:
+    """`/세미나-토픽` 슬래시 응답으로 띄울 모달."""
+    return {
+        "type": "modal",
+        "callback_id": "submit_topic",
+        "private_metadata": json.dumps({
+            "seminar_date": seminar_date.isoformat(),
+            "presenter": presenter,
+        }),
+        "title": {"type": "plain_text", "text": "발표 토픽 등록"},
+        "submit": {"type": "plain_text", "text": "저장"},
+        "close": {"type": "plain_text", "text": "취소"},
+        "blocks": [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f"*{seminar_date.isoformat()} 발표*\n발표자: {presenter}\n"
+                        "이번에 다룰 토픽을 한두 줄로 적어주세요. 월요일 채널 공지에 함께 표시됩니다."
+                    ),
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "topic_block",
+                "label": {"type": "plain_text", "text": "토픽"},
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "topic_input",
+                    "multiline": True,
+                    "initial_value": current_topic or "",
+                    "max_length": 500,
+                    "placeholder": {"type": "plain_text", "text": "예: LLM agent 자율 도구 사용 — ReAct vs Reflexion 비교"},
+                },
+            },
+        ],
+    }
+
+
 def submission_modal(seminar_date: date, presenter: str, *, is_test: bool = False) -> dict:
     """`/제출` 슬래시 응답으로 띄울 모달.
 

@@ -77,12 +77,13 @@ ROUTE_INTENT_TOOL: dict[str, Any] = {
             "properties": {
                 "intent": {
                     "type": "string",
-                    "enum": ["defer", "preference", "schedule_question", "material_question", "other"],
+                    "enum": ["defer", "preference", "schedule_question", "material_question", "topic_registration", "other"],
                     "description": (
                         "defer: 발표 연기 의사. "
                         "preference: 평상시 선호도 등록/수정. "
-                        "schedule_question: 일정/발표자 자체에 대한 단순 조회 (예: '내 차례 언제?'). "
-                        "material_question: 발표 *자료 내용*에 대한 질문 (예: 'X가 어떤 모델 썼어?', 'LLM agent 발표 요약'). "
+                        "schedule_question: 일정/발표자 자체에 대한 단순 조회. "
+                        "material_question: 발표 자료 내용에 대한 질문 (검색 결과 참조). "
+                        "topic_registration: 본인 발표 토픽을 알리려는 의사 ('내 토픽은 ~', '이번에 X 발표할게요'). "
                         "other: 인사/잡담/모호한 메시지."
                     ),
                 },
@@ -520,6 +521,7 @@ route_intent tool을 반드시 한 번 호출한다.
 - preference: 평상시 발표 선호 등록 (예: "월말 회피", "1부 선호", "5월 둘째주 휴가 예정")
 - schedule_question: 일정/발표자에 대한 단순 조회. (예: '내 차례 언제?', '5/21 누구?')
 - material_question: 발표 자료 내용에 대한 질문 (자료 검색 미리보기 참조).
+- topic_registration: 본인이 다룰 토픽을 알리려는 의사. (예: '이번에 LLM agent 발표할게요', '내 토픽은 RAG 비교')
 - other: 인사, 잡담, 봇 사용법, 또는 검색 미리보기가 부적합하면 여기.
   fallback_reply에 친근하게 답하되, 자료에 없는 정보는 자체 지식으로 답하지 말고 안내만.{hits_block}"""
 

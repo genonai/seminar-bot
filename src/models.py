@@ -56,9 +56,18 @@ class Schedule:
     slot_2: str | None
     cycle_id: int
     status: str = "예정"                  # 예정 / 완료 / 취소
+    slot_1_topic: str | None = None
+    slot_2_topic: str | None = None
 
     def presenters(self) -> list[str]:
         return [s for s in (self.slot_1, self.slot_2) if s]
+
+    def topic_for(self, name: str) -> str | None:
+        if self.slot_1 == name:
+            return self.slot_1_topic
+        if self.slot_2 == name:
+            return self.slot_2_topic
+        return None
 
 
 @dataclass

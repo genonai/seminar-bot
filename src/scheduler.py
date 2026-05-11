@@ -72,6 +72,20 @@ def _job_member_sync(client: WebClient) -> None:
     log.info("member_sync: active=%d errors=%s", len(active), errors)
 
 
+def _job_monday_preview(client: WebClient) -> None:
+    today = date.today()
+    if today.weekday() != 0:
+        return  # 월요일만
+    with session(DB_PATH) as conn:
+        notification_service.send_monday_preview(client, conn, today)
+
+
+def _job_topic_reminder(client: WebClient) -> None:
+    today = date.today()
+    with session(DB_PATH) as conn:
+        notification_service.send_topic_reminders(client, conn, today)
+
+
 def start_scheduler(client: WebClient) -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone=TIMEZONE)
 
@@ -104,6 +118,16 @@ def start_scheduler(client: WebClient) -> BackgroundScheduler:
         _job_member_sync, args=(client,),
         trigger=CronTrigger(hour=9, minute=0, timezone=TIMEZONE),  # 매일 09:00
         id="member_sync", replace_existing=True,
+    )
+    scheduler.add_job(
+        _job_monday_preview, args=(client,),
+        trigger=CronTrigger(day_of_week="mon", hour=9, minute=0, timezone=TIMEZONE),
+        id="monday_preview", replace_existing=True,
+    )
+    scheduler.add_job(
+        _job_topic_reminder, args=(client,),
+        trigger=CronTrigger(hour=10, minute=0, timezone=TIMEZONE),  # 매일 10:00
+        id="topic_reminder", replace_existing=True,
     )
 
     scheduler.start()

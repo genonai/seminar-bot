@@ -9,6 +9,7 @@ from ..models import Schedule
 
 
 def _row_to_schedule(row: sqlite3.Row) -> Schedule:
+    keys = set(row.keys())
     return Schedule(
         date=date.fromisoformat(row["date"]),
         reminder_date=date.fromisoformat(row["reminder_date"]),
@@ -16,6 +17,8 @@ def _row_to_schedule(row: sqlite3.Row) -> Schedule:
         slot_2=row["slot_2"],
         cycle_id=row["cycle_id"],
         status=row["status"],
+        slot_1_topic=row["slot_1_topic"] if "slot_1_topic" in keys else None,
+        slot_2_topic=row["slot_2_topic"] if "slot_2_topic" in keys else None,
     )
 
 
@@ -79,6 +82,46 @@ def upsert(conn: sqlite3.Connection, s: Schedule) -> None:
                 s.cycle_id,
             ),
         )
+
+
+def set_topic(
+    conn: sqlite3.Connection, target_date: date, presenter_name: str, topic: str
+) -> bool:
+    """target_date의 slot_1 또는 slot_2가 presenter_name 이면 그 슬롯의 topic 갱신.
+    Returns True if updated."""
+    s = get_by_date(conn, target_date)
+    if s is None:
+        return False
+    with conn:
+        if s.slot_1 == presenter_name:
+            conn.execute(
+                "UPDATE schedule SET slot_1_topic = ? WHERE date = ?",
+                (topic, target_date.isoformat()),
+            )
+            return True
+        if s.slot_2 == presenter_name:
+            conn.execute(
+                "UPDATE schedule SET slot_2_topic = ? WHERE date = ?",
+                (topic, target_date.isoformat()),
+            )
+            return True
+    return False
+
+
+def get_next_seminar(
+    conn: sqlite3.Connection, today: date | None = None
+) -> Schedule | None:
+    """오늘 이후 가장 가까운 1개 일정 (월요일 알림용)."""
+    today = today or date.today()
+    row = conn.execute(
+        """
+        SELECT * FROM schedule
+        WHERE date >= ? AND status NOT IN ('취소', '완료')
+        ORDER BY date ASC LIMIT 1
+        """,
+        (today.isoformat(),),
+    ).fetchone()
+    return _row_to_schedule(row) if row else None
 
 
 def replace_presenter(

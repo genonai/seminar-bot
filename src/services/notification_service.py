@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 from slack_sdk import WebClient
 
-from ..config import CHANNEL_ID, DEFER_DEADLINE_DAYS
+from ..config import BROADCAST_CHANNELS, CHANNEL_ID, DEFER_DEADLINE_DAYS
 from . import member_service, schedule_service
 
 log = logging.getLogger(__name__)
@@ -31,6 +31,18 @@ def _try_record(conn: sqlite3.Connection, ntype: str, target: date) -> bool:
 
 def _open_dm(client: WebClient, slack_user_id: str) -> str:
     return client.conversations_open(users=slack_user_id)["channel"]["id"]
+
+
+def broadcast(client: WebClient, *, text: str, blocks: list[dict] | None = None) -> None:
+    """BROADCAST_CHANNELS 모든 채널에 발송. 한 채널 실패해도 나머지 진행."""
+    for ch in BROADCAST_CHANNELS:
+        try:
+            kwargs: dict = {"channel": ch, "text": text}
+            if blocks is not None:
+                kwargs["blocks"] = blocks
+            client.chat_postMessage(**kwargs)
+        except Exception as e:
+            log.warning("broadcast → %s 실패: %s", ch, e)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -69,16 +81,75 @@ def send_thursday_announce(client: WebClient, conn: sqlite3.Connection, today_th
         return
     slot_1 = s.slot_1 or "_미정_"
     slot_2 = s.slot_2 or "_미정_"
-    client.chat_postMessage(
-        channel=CHANNEL_ID,
+    t1 = f" — _{s.slot_1_topic}_" if s.slot_1_topic else ""
+    t2 = f" — _{s.slot_2_topic}_" if s.slot_2_topic else ""
+    broadcast(
+        client,
         text=(
             f":sparkles: *오늘 14:00 주간 세미나*\n"
-            f"  • 1부: *{slot_1}*\n"
-            f"  • 2부: *{slot_2}*\n"
+            f"  • 1부: *{slot_1}*{t1}\n"
+            f"  • 2부: *{slot_2}*{t2}\n"
             "관심 있으신 분 모두 환영합니다 :coffee:"
         ),
     )
-    log.info("thursday_announce → channel for %s", today_thu)
+    log.info("thursday_announce → broadcast for %s", today_thu)
+
+
+def send_monday_preview(client: WebClient, conn: sqlite3.Connection, today_mon: date) -> None:
+    """매주 월요일 09:00 — 이번 주 목요일 발표자 + 토픽 미리 공지."""
+    if not _try_record(conn, "monday_preview", today_mon):
+        return
+    # 이번 주 목요일 = today_mon + 3 (월=0, 목=3)
+    target_thu = today_mon + timedelta(days=3)
+    s = schedule_service.get_by_date(conn, target_thu)
+    if s is None or s.status != "예정":
+        log.info("monday_preview: %s 일정 없음 (또는 취소/완료), skip", target_thu)
+        return
+
+    slot_1 = s.slot_1 or "_미정_"
+    slot_2 = s.slot_2 or "_미정_"
+    t1 = f"\n     ↳ 토픽: {s.slot_1_topic}" if s.slot_1_topic else "\n     ↳ 토픽: _아직 미공유_"
+    t2 = f"\n     ↳ 토픽: {s.slot_2_topic}" if s.slot_2_topic else "\n     ↳ 토픽: _아직 미공유_"
+    broadcast(
+        client,
+        text=(
+            f":calendar: *이번 주 목요일 ({target_thu.month}/{target_thu.day}) 14:00 — 주간 세미나*\n"
+            f"  • 1부 (14:00-14:30): *{slot_1}*{t1}\n"
+            f"  • 2부 (14:30-15:00): *{slot_2}*{t2}\n"
+            "발표자분들 자료 마감은 수요일 14:00입니다 :muscle:"
+        ),
+    )
+    log.info("monday_preview → broadcast for %s", target_thu)
+
+
+def send_topic_reminders(client: WebClient, conn: sqlite3.Connection, today: date) -> None:
+    """발표 7일 전 발표자에게 토픽 미등록이면 DM 알림."""
+    target = today + timedelta(days=7)
+    if target.weekday() != 3:
+        return  # 목요일 아닌 경우 skip
+    if not _try_record(conn, "topic_reminder", target):
+        return
+    s = schedule_service.get_by_date(conn, target)
+    if s is None or s.status != "예정":
+        return
+
+    for slot_name, topic, slot_label in [
+        (s.slot_1, s.slot_1_topic, "1부"),
+        (s.slot_2, s.slot_2_topic, "2부"),
+    ]:
+        if not slot_name or topic:
+            continue
+        m = member_service.get_by_name(conn, slot_name)
+        if m is None:
+            continue
+        client.chat_postMessage(
+            channel=_open_dm(client, m.slack_user_id),
+            text=(
+                f":memo: 다음 주 {target.month}/{target.day}(목) *{slot_label}* 발표 — 아직 토픽 미공유.\n"
+                "`/세미나-토픽` 또는 봇 DM에 \"내 토픽은 ~\" 으로 등록 부탁드립니다."
+            ),
+        )
+        log.info("topic_reminder DM → %s for %s", m.name, target)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -122,4 +193,4 @@ def announce_new_cycle(client: WebClient, schedules: list, cycle_id: int) -> Non
         lines.append(f"• *{fmt_date(s.date)}* — 1부: {slot_1} / 2부: {slot_2}")
     lines.append("")
     lines.append("선호도 기반 자동 배정. 변경 의견은 운영자에게 알려주세요.")
-    client.chat_postMessage(channel=CHANNEL_ID, text="\n".join(lines))
+    broadcast(client, text="\n".join(lines))
