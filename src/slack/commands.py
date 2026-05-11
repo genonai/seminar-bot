@@ -16,6 +16,7 @@ from ..services import (
     member_service,
     notification_service,
     schedule_service,
+    submission_service,
 )
 from . import flows, guards, messages, views
 
@@ -216,6 +217,61 @@ def register(app: App) -> None:
         except Exception as e:
             log.exception("/제출 modal 열기 실패")
             respond(text=f":x: 모달 열기 실패: {e}", response_type="ephemeral")
+
+    @app.command("/세미나-현황")
+    def handle_status(ack: Ack, body: dict, respond: Respond) -> None:
+        """운영자 한정. 다가올 일정 + 토픽/자료/안내 상태 한 번에 보기."""
+        ack()
+        user_id = body["user_id"]
+        log.info("/세미나-현황 user=%s", user_id)
+        if not admin_service.is_admin(user_id):
+            guards.reject_non_admin(respond)
+            return
+        if not guards.in_seminar_channel(body):
+            guards.reject_wrong_channel(respond)
+            return
+
+        today = date.today()
+        with session(DB_PATH) as conn:
+            upcoming = schedule_service.get_upcoming(conn, today=today, limit=5)
+            if not upcoming:
+                respond(text=":information_source: 다가올 일정 없음.", response_type="ephemeral")
+                return
+
+            lines = [":clipboard: *운영자 현황* (다가올 5주)", ""]
+            any_missing_topic = False
+            for s in upcoming:
+                lines.append(f"*{messages.fmt_date(s.date)}*")
+                subs = {sub.presenter: sub for sub in submission_service.get_for_seminar(conn, s.date)}
+                for slot_name, topic, slot_label in [
+                    (s.slot_1, s.slot_1_topic, "1부"),
+                    (s.slot_2, s.slot_2_topic, "2부"),
+                ]:
+                    if not slot_name:
+                        lines.append(f"   {slot_label}: _빈 슬롯_")
+                        continue
+                    topic_mark = (
+                        f":white_check_mark: _{topic}_" if topic
+                        else ":x: 미등록"
+                    )
+                    if not topic:
+                        any_missing_topic = True
+                    sub = subs.get(slot_name)
+                    if sub:
+                        mat_mark = f":white_check_mark: 제출 ({sub.page_count}p)"
+                    else:
+                        days = (s.date - today).days
+                        mat_mark = ":hourglass: 미제출" if days <= 1 else "—"
+                    lines.append(f"   {slot_label} *{slot_name}* — 토픽: {topic_mark}  /  자료: {mat_mark}")
+                if s.notes:
+                    lines.append(f"   :pushpin: {s.notes}")
+                lines.append("")
+
+            if any_missing_topic:
+                lines.append(":bulb: 토픽 미등록자에게 알림: `/세미나-토픽-알림`")
+            lines.append(":bulb: 안내사항 등록: `/세미나-안내` 또는 봇 DM")
+
+        respond(text="\n".join(lines), response_type="ephemeral")
 
     @app.command("/세미나-안내")
     def handle_seminar_note(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
