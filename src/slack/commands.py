@@ -137,29 +137,46 @@ def register(app: App) -> None:
     @app.command("/제출")
     def handle_submit(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
         ack()
-        log.info("/제출 user=%s channel=%s", body.get("user_id"), body.get("channel_id"))
+        user_id = body["user_id"]
+        log.info("/제출 user=%s channel=%s", user_id, body.get("channel_id"))
         if not guards.in_seminar_channel(body):
             guards.reject_wrong_channel(respond)
             return
-        if not guards.is_member_or_admin(body["user_id"]):
+        if not guards.is_member_or_admin(user_id):
             guards.reject_non_member(respond)
             return
 
         today = date.today()
+        is_test = False
         with session(DB_PATH) as conn:
-            assignment = defer_service.find_requester_assignment(conn, body["user_id"], today)
+            assignment = defer_service.find_requester_assignment(conn, user_id, today)
+
         if assignment is None:
-            respond(
-                text=":information_source: 다가올 발표 일정이 없어 자료 제출 대상이 아닙니다.",
-                response_type="ephemeral",
-            )
-            return
-        seminar_date, presenter = assignment
+            # 운영자는 테스트 모드 허용: 다음 목요일 placeholder, 채널 공지 skip
+            if admin_service.is_admin(user_id):
+                from datetime import timedelta
+                days = (3 - today.weekday()) % 7 or 7
+                seminar_date = today + timedelta(days=days)
+                try:
+                    info = client.users_info(user=user_id)
+                    real_name = info["user"].get("real_name") or info["user"].get("name") or user_id
+                except Exception:
+                    real_name = user_id
+                presenter = f"[TEST] {real_name}"
+                is_test = True
+            else:
+                respond(
+                    text=":information_source: 다가올 발표 일정이 없어 자료 제출 대상이 아닙니다.",
+                    response_type="ephemeral",
+                )
+                return
+        else:
+            seminar_date, presenter = assignment
 
         try:
             client.views_open(
                 trigger_id=body["trigger_id"],
-                view=views.submission_modal(seminar_date, presenter),
+                view=views.submission_modal(seminar_date, presenter, is_test=is_test),
             )
         except Exception as e:
             log.exception("/제출 modal 열기 실패")

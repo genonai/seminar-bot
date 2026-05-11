@@ -45,6 +45,7 @@ def process_submission_async(
     seminar_date,                   # date
     file_id: str,
     title_hint: str,
+    is_test: bool = False,
 ) -> None:
     """별도 thread에서 호출됨. Slack ack는 호출자가 이미 처리.
     실패해도 raise하지 말고 사용자에게 DM으로 알림."""
@@ -97,21 +98,23 @@ def process_submission_async(
     tag_text = ", ".join(f"`{t}`" for t in (result.get("tags") or [])[:8])
     entity_count = len(result.get("entities") or [])
 
+    test_tag = " :test_tube: 테스트 모드 — 채널 공지 skip됨" if is_test else ""
     client.chat_postMessage(
         channel=dm_channel,
         text=(
-            f":white_check_mark: *처리 완료* — _{title}_ ({page_count}p)\n"
+            f":white_check_mark: *처리 완료* — _{title}_ ({page_count}p){test_tag}\n"
             f"태그: {tag_text or '없음'}  |  엔티티 {entity_count}개 추출\n"
             f"이제 멤버들이 봇 DM에 자료 관련 질문을 던지면 답변할 수 있습니다."
         ),
     )
 
-    # 4) 채널 공지
-    announce_channel_submission(
-        client, presenter=presenter, seminar_date=seminar_date,
-        title=title, summary=summary, tags=result.get("tags") or [],
-        page_count=page_count, slack_file_id=file_id, submission_id=submission_id,
-    )
+    # 4) 채널 공지 (테스트 모드면 skip)
+    if not is_test:
+        announce_channel_submission(
+            client, presenter=presenter, seminar_date=seminar_date,
+            title=title, summary=summary, tags=result.get("tags") or [],
+            page_count=page_count, slack_file_id=file_id, submission_id=submission_id,
+        )
 
 
 def announce_channel_submission(

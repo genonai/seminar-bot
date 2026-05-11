@@ -5,16 +5,21 @@ import json
 from datetime import date
 
 
-def submission_modal(seminar_date: date, presenter: str) -> dict:
-    """`/제출` 슬래시 응답으로 띄울 모달."""
+def submission_modal(seminar_date: date, presenter: str, *, is_test: bool = False) -> dict:
+    """`/제출` 슬래시 응답으로 띄울 모달.
+
+    is_test=True 면 운영자 테스트 모드 — 채널 공지 skip, DB는 정상 기록.
+    wipe_submissions.py 로 정리.
+    """
     return {
         "type": "modal",
         "callback_id": "submit_material",
         "private_metadata": json.dumps({
             "seminar_date": seminar_date.isoformat(),
             "presenter": presenter,
+            "is_test": is_test,
         }),
-        "title": {"type": "plain_text", "text": "발표 자료 제출"},
+        "title": {"type": "plain_text", "text": "[테스트] 자료 제출" if is_test else "발표 자료 제출"},
         "submit": {"type": "plain_text", "text": "제출"},
         "close": {"type": "plain_text", "text": "취소"},
         "blocks": [

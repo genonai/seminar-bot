@@ -41,6 +41,7 @@ def register(app: App) -> None:
             metadata = json.loads(view.get("private_metadata", "{}"))
             seminar_date = date.fromisoformat(metadata["seminar_date"])
             presenter = metadata["presenter"]
+            is_test = bool(metadata.get("is_test", False))
         except Exception:
             log.exception("private_metadata 파싱 실패")
             return
@@ -68,6 +69,7 @@ def register(app: App) -> None:
                 "seminar_date": seminar_date,
                 "file_id": file_id,
                 "title_hint": title_input,
+                "is_test": is_test,
             },
             daemon=True,
             name=f"submission-{file_id}",
