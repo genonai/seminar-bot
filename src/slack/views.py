@@ -5,6 +5,36 @@ import json
 from datetime import date
 
 
+def announce_modal(initial_text: str = "") -> dict:
+    """`/세미나-공지` 운영자 한정 — 모든 BROADCAST_CHANNELS 에 발송할 메시지 미리보기."""
+    return {
+        "type": "modal",
+        "callback_id": "broadcast_announce",
+        "title": {"type": "plain_text", "text": "채널 공지"},
+        "submit": {"type": "plain_text", "text": "발송"},
+        "close": {"type": "plain_text", "text": "취소"},
+        "blocks": [
+            {
+                "type": "context",
+                "elements": [{"type": "mrkdwn", "text": "이 메시지는 *모든 공지 채널* 에 봇 명의로 게시됩니다."}],
+            },
+            {
+                "type": "input",
+                "block_id": "msg_block",
+                "label": {"type": "plain_text", "text": "메시지 (마크다운 지원)"},
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "msg_input",
+                    "multiline": True,
+                    "initial_value": initial_text or "",
+                    "max_length": 3000,
+                    "placeholder": {"type": "plain_text", "text": "예: 다음 주 세미나 시간이 14:30으로 변경되었습니다."},
+                },
+            },
+        ],
+    }
+
+
 def topic_modal(seminar_date: date, presenter: str, current_topic: str = "") -> dict:
     """`/세미나-토픽` 슬래시 응답으로 띄울 모달."""
     return {

@@ -13,15 +13,48 @@ from datetime import date
 from slack_bolt import Ack, App
 from slack_sdk import WebClient
 
-from ..config import DB_PATH
+from ..config import BROADCAST_CHANNELS, DB_PATH
 from ..db import session
-from ..services import schedule_service
+from ..services import admin_service, notification_service, schedule_service
 from . import flows
 
 log = logging.getLogger(__name__)
 
 
 def register(app: App) -> None:
+    @app.view("broadcast_announce")
+    def on_broadcast_announce(ack: Ack, body: dict, view: dict, client: WebClient) -> None:
+        slack_user_id = body["user"]["id"]
+        # 보안: 운영자만 발송 가능
+        if not admin_service.is_admin(slack_user_id):
+            ack({"response_action": "errors", "errors": {"msg_block": "운영자만 발송 가능합니다."}})
+            return
+
+        text = (
+            view.get("state", {}).get("values", {})
+                .get("msg_block", {}).get("msg_input", {}).get("value")
+            or ""
+        ).strip()
+        if not text:
+            ack({"response_action": "errors", "errors": {"msg_block": "메시지를 입력해주세요."}})
+            return
+        ack()
+
+        notification_service.broadcast(client, text=text)
+        # 발송한 운영자에게 DM 확인
+        try:
+            dm = client.conversations_open(users=slack_user_id)["channel"]["id"]
+            client.chat_postMessage(
+                channel=dm,
+                text=(
+                    f":mega: 공지 발송 완료 — {len(BROADCAST_CHANNELS)}개 채널에 게시.\n"
+                    f"> {text[:300]}{'...' if len(text) > 300 else ''}"
+                ),
+            )
+        except Exception as e:
+            log.warning("발송 확인 DM 실패: %s", e)
+        log.info("/세미나-공지 by %s → %d 채널 (text len=%d)", slack_user_id, len(BROADCAST_CHANNELS), len(text))
+
     @app.view("submit_topic")
     def on_submit_topic(ack: Ack, body: dict, view: dict, client: WebClient) -> None:
         state = view.get("state", {}).get("values", {})

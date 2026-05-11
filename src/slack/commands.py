@@ -217,6 +217,29 @@ def register(app: App) -> None:
             log.exception("/제출 modal 열기 실패")
             respond(text=f":x: 모달 열기 실패: {e}", response_type="ephemeral")
 
+    @app.command("/세미나-공지")
+    def handle_announce(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
+        """운영자 한정. 모든 BROADCAST_CHANNELS 에 임의 메시지 발송."""
+        ack()
+        user_id = body["user_id"]
+        log.info("/세미나-공지 user=%s channel=%s", user_id, body.get("channel_id"))
+        if not admin_service.is_admin(user_id):
+            guards.reject_non_admin(respond)
+            return
+        if not guards.in_seminar_channel(body):
+            guards.reject_wrong_channel(respond)
+            return
+
+        initial = (body.get("text") or "").strip()
+        try:
+            client.views_open(
+                trigger_id=body["trigger_id"],
+                view=views.announce_modal(initial),
+            )
+        except Exception as e:
+            log.exception("/세미나-공지 modal 열기 실패")
+            respond(text=f":x: 모달 열기 실패: {e}", response_type="ephemeral")
+
     @app.command("/세미나-토픽-알림")
     def handle_topic_remind(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
         """운영자 한정. 다가올 첫 세미나의 토픽 미등록 발표자에게 DM 발송."""
