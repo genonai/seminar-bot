@@ -83,12 +83,13 @@ def send_thursday_announce(client: WebClient, conn: sqlite3.Connection, today_th
     slot_2 = s.slot_2 or "_미정_"
     t1 = f" — _{s.slot_1_topic}_" if s.slot_1_topic else ""
     t2 = f" — _{s.slot_2_topic}_" if s.slot_2_topic else ""
+    note_line = f"\n:pushpin: {s.notes}" if s.notes else ""
     broadcast(
         client,
         text=(
             f":sparkles: *오늘 14:00 주간 세미나*\n"
             f"  • 1부: *{slot_1}*{t1}\n"
-            f"  • 2부: *{slot_2}*{t2}\n"
+            f"  • 2부: *{slot_2}*{t2}{note_line}\n"
             "관심 있으신 분 모두 환영합니다 :coffee:"
         ),
     )
@@ -110,12 +111,13 @@ def send_monday_preview(client: WebClient, conn: sqlite3.Connection, today_mon: 
     slot_2 = s.slot_2 or "_미정_"
     t1 = f"\n     ↳ 토픽: {s.slot_1_topic}" if s.slot_1_topic else "\n     ↳ 토픽: _아직 미공유_"
     t2 = f"\n     ↳ 토픽: {s.slot_2_topic}" if s.slot_2_topic else "\n     ↳ 토픽: _아직 미공유_"
+    note_line = f"\n:pushpin: *안내*: {s.notes}" if s.notes else ""
     broadcast(
         client,
         text=(
             f":calendar: *이번 주 목요일 ({target_thu.month}/{target_thu.day}) 14:00 — 주간 세미나*\n"
             f"  • 1부 (14:00-14:30): *{slot_1}*{t1}\n"
-            f"  • 2부 (14:30-15:00): *{slot_2}*{t2}\n"
+            f"  • 2부 (14:30-15:00): *{slot_2}*{t2}{note_line}\n"
             "발표자분들 자료 마감은 수요일 14:00입니다 :muscle:"
         ),
     )

@@ -19,6 +19,7 @@ def _row_to_schedule(row: sqlite3.Row) -> Schedule:
         status=row["status"],
         slot_1_topic=row["slot_1_topic"] if "slot_1_topic" in keys else None,
         slot_2_topic=row["slot_2_topic"] if "slot_2_topic" in keys else None,
+        notes=row["notes"] if "notes" in keys else None,
     )
 
 
@@ -106,6 +107,20 @@ def set_topic(
             )
             return True
     return False
+
+
+def set_notes(conn: sqlite3.Connection, target_date: date, notes: str | None) -> bool:
+    """schedule.notes 갱신. 빈 문자열/None 이면 NULL로 클리어."""
+    s = get_by_date(conn, target_date)
+    if s is None:
+        return False
+    payload = notes.strip() if notes else None
+    with conn:
+        conn.execute(
+            "UPDATE schedule SET notes = ? WHERE date = ?",
+            (payload, target_date.isoformat()),
+        )
+    return True
 
 
 def get_next_seminar(

@@ -322,6 +322,8 @@ def handle_dm_message(
             _answer_material(client, channel, text, prefetched_hits=prefetch_hits)
         elif intent.intent == "topic_registration":
             _register_topic_from_dm(client, conn, slack_user_id, channel, text, today)
+        elif intent.intent == "seminar_note":
+            _save_seminar_note(client, conn, slack_user_id, channel, text, today)
         else:
             reply = intent.fallback_reply or (
                 "어떤 도움이 필요하신가요? 발표 연기, 선호도 등록, 일정 조회, 자료 질문 같은 걸 도와드려요."
@@ -409,6 +411,68 @@ def _answer_schedule(
     )
     if answer:
         client.chat_postMessage(channel=dm_channel, text=answer)
+
+
+def _save_seminar_note(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, text: str, today: date
+) -> None:
+    """운영자가 DM 자연어로 회차별 운영 노트(장소/시간 변경 등) 등록."""
+    if not admin_service.is_admin(slack_user_id):
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=":no_entry_sign: 운영 안내는 운영자만 등록할 수 있습니다.",
+        )
+        return
+
+    upcoming = schedule_service.get_upcoming(conn, today=today, limit=6)
+    upcoming_payload = [
+        {"date": s.date.isoformat(), "slot_1": s.slot_1, "slot_2": s.slot_2}
+        for s in upcoming
+    ]
+
+    try:
+        result = llm_service.extract_seminar_note(
+            text, upcoming=upcoming_payload, today=today.isoformat(),
+        )
+    except Exception as e:
+        log.exception("seminar_note 추출 실패")
+        client.chat_postMessage(channel=dm_channel, text=f":x: 안내 추출 중 오류 ({e})")
+        return
+
+    notes = (result.get("notes") or "").strip()
+    target = result.get("target_date")
+    if not notes:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=("안내 본문을 좀 더 명확히 알려주세요. 예: _\"이번 주는 회의실 B에서 14:30 시작\"_"),
+        )
+        return
+
+    target_date: date | None = None
+    if target:
+        try:
+            target_date = date.fromisoformat(target)
+        except Exception:
+            target_date = None
+    if target_date is None and upcoming:
+        target_date = upcoming[0].date
+    if target_date is None:
+        client.chat_postMessage(channel=dm_channel, text=":x: 다가올 일정이 없어 안내 저장 불가.")
+        return
+
+    ok = schedule_service.set_notes(conn, target_date, notes)
+    if ok:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=(
+                f":pushpin: 운영 안내 저장됨 — *{target_date.isoformat()}*\n"
+                f"> {notes}\n"
+                "월요일 미리보기 + 당일 채널 공지에 함께 표시됩니다. 수정하려면 새 메시지 보내주세요."
+            ),
+        )
+        log.info("seminar_note saved: %s ← %r", target_date, notes[:120])
+    else:
+        client.chat_postMessage(channel=dm_channel, text=":x: 해당 날짜 일정을 찾지 못함.")
 
 
 def _register_topic_from_dm(

@@ -55,6 +55,57 @@ def register(app: App) -> None:
             log.warning("발송 확인 DM 실패: %s", e)
         log.info("/세미나-공지 by %s → %d 채널 (text len=%d)", slack_user_id, len(BROADCAST_CHANNELS), len(text))
 
+    @app.view("submit_seminar_note")
+    def on_submit_seminar_note(ack: Ack, body: dict, view: dict, client: WebClient) -> None:
+        slack_user_id = body["user"]["id"]
+        if not admin_service.is_admin(slack_user_id):
+            ack({"response_action": "errors", "errors": {"date_block": "운영자만 등록 가능합니다."}})
+            return
+        state = view.get("state", {}).get("values", {})
+        date_str = (
+            state.get("date_block", {})
+                 .get("date_select", {})
+                 .get("selected_option", {})
+                 .get("value")
+            or ""
+        )
+        note = (
+            state.get("note_block", {})
+                 .get("note_input", {})
+                 .get("value")
+            or ""
+        ).strip()
+
+        if not date_str:
+            ack({"response_action": "errors", "errors": {"date_block": "회차를 선택해주세요."}})
+            return
+        ack()
+
+        try:
+            target = date.fromisoformat(date_str)
+        except Exception:
+            log.warning("invalid date: %s", date_str)
+            return
+
+        with session(DB_PATH) as conn:
+            ok = schedule_service.set_notes(conn, target, note if note else None)
+
+        dm = client.conversations_open(users=slack_user_id)["channel"]["id"]
+        if ok:
+            if note:
+                client.chat_postMessage(
+                    channel=dm,
+                    text=f":pushpin: 안내사항 저장됨 — *{target.isoformat()}*\n> {note}",
+                )
+            else:
+                client.chat_postMessage(
+                    channel=dm,
+                    text=f":wastebasket: 안내사항 삭제됨 — *{target.isoformat()}*",
+                )
+            log.info("seminar_note via modal: %s ← %r", target, note[:120])
+        else:
+            client.chat_postMessage(channel=dm, text=":x: 해당 일정 못 찾음.")
+
     @app.view("submit_topic")
     def on_submit_topic(ack: Ack, body: dict, view: dict, client: WebClient) -> None:
         state = view.get("state", {}).get("values", {})

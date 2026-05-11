@@ -5,6 +5,56 @@ import json
 from datetime import date
 
 
+def seminar_note_modal(upcoming: list, default_idx: int = 0) -> dict:
+    """`/세미나-안내` 운영자 — 회차 선택 + 노트 입력. upcoming: list[Schedule]."""
+    options = []
+    for i, s in enumerate(upcoming[:10]):
+        label = f"{s.date.isoformat()} — 1부 {s.slot_1 or '미정'} / 2부 {s.slot_2 or '미정'}"
+        options.append({
+            "text": {"type": "plain_text", "text": label[:75]},
+            "value": s.date.isoformat(),
+        })
+    if not options:
+        options = [{"text": {"type": "plain_text", "text": "다가올 일정 없음"}, "value": ""}]
+
+    initial_note = upcoming[default_idx].notes if upcoming and default_idx < len(upcoming) and upcoming[default_idx].notes else ""
+
+    return {
+        "type": "modal",
+        "callback_id": "submit_seminar_note",
+        "title": {"type": "plain_text", "text": "세미나 안내사항"},
+        "submit": {"type": "plain_text", "text": "저장"},
+        "close": {"type": "plain_text", "text": "취소"},
+        "blocks": [
+            {
+                "type": "input",
+                "block_id": "date_block",
+                "label": {"type": "plain_text", "text": "회차"},
+                "element": {
+                    "type": "static_select",
+                    "action_id": "date_select",
+                    "options": options,
+                    "initial_option": options[0],
+                },
+            },
+            {
+                "type": "input",
+                "block_id": "note_block",
+                "optional": True,    # 빈 값 = 클리어
+                "label": {"type": "plain_text", "text": "안내사항 (비우면 삭제)"},
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "note_input",
+                    "multiline": True,
+                    "initial_value": initial_note or "",
+                    "max_length": 500,
+                    "placeholder": {"type": "plain_text", "text": "예: 이번 주는 회의실 B에서 14:30 시작"},
+                },
+            },
+        ],
+    }
+
+
 def announce_modal(initial_text: str = "") -> dict:
     """`/세미나-공지` 운영자 한정 — 모든 BROADCAST_CHANNELS 에 발송할 메시지 미리보기."""
     return {

@@ -217,6 +217,34 @@ def register(app: App) -> None:
             log.exception("/제출 modal 열기 실패")
             respond(text=f":x: 모달 열기 실패: {e}", response_type="ephemeral")
 
+    @app.command("/세미나-안내")
+    def handle_seminar_note(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
+        """운영자 한정. 다가올 회차에 운영 안내 노트 등록/수정."""
+        ack()
+        user_id = body["user_id"]
+        log.info("/세미나-안내 user=%s channel=%s", user_id, body.get("channel_id"))
+        if not admin_service.is_admin(user_id):
+            guards.reject_non_admin(respond)
+            return
+        if not guards.in_seminar_channel(body):
+            guards.reject_wrong_channel(respond)
+            return
+
+        today = date.today()
+        with session(DB_PATH) as conn:
+            upcoming = schedule_service.get_upcoming(conn, today=today, limit=10)
+        if not upcoming:
+            respond(text=":information_source: 다가올 일정이 없습니다.", response_type="ephemeral")
+            return
+        try:
+            client.views_open(
+                trigger_id=body["trigger_id"],
+                view=views.seminar_note_modal(upcoming),
+            )
+        except Exception as e:
+            log.exception("/세미나-안내 modal 열기 실패")
+            respond(text=f":x: 모달 열기 실패: {e}", response_type="ephemeral")
+
     @app.command("/세미나-공지")
     def handle_announce(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
         """운영자 한정. 모든 BROADCAST_CHANNELS 에 임의 메시지 발송."""

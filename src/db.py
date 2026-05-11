@@ -113,6 +113,7 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("members", "is_active", "INTEGER NOT NULL DEFAULT 1"),
     ("schedule", "slot_1_topic", "TEXT"),
     ("schedule", "slot_2_topic", "TEXT"),
+    ("schedule", "notes", "TEXT"),
 )
 
 

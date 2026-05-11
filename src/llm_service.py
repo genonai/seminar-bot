@@ -77,13 +77,15 @@ ROUTE_INTENT_TOOL: dict[str, Any] = {
             "properties": {
                 "intent": {
                     "type": "string",
-                    "enum": ["defer", "preference", "schedule_question", "material_question", "topic_registration", "other"],
+                    "enum": ["defer", "preference", "schedule_question", "material_question", "topic_registration", "seminar_note", "other"],
                     "description": (
                         "defer: 발표 연기 의사. "
                         "preference: 평상시 선호도 등록/수정. "
                         "schedule_question: 일정/발표자 자체에 대한 단순 조회. "
                         "material_question: 발표 자료 내용에 대한 질문 (검색 결과 참조). "
                         "topic_registration: 본인 발표 토픽을 알리려는 의사 ('내 토픽은 ~', '이번에 X 발표할게요'). "
+                        "seminar_note: 다가올 세미나 회차에 대한 운영 안내사항 (장소/시간 변경/회식 등) — 운영자만 의미 있음. "
+                        "  예: '이번주 회의실 B', '5/14 14:30 시작', '다음주 휴무'. "
                         "other: 인사/잡담/모호한 메시지."
                     ),
                 },
@@ -406,6 +408,53 @@ def extract_document_metadata(
     return data
 
 
+def extract_seminar_note(
+    user_message: str,
+    *,
+    upcoming: list[dict[str, Any]],
+    today: str,
+) -> dict[str, Any]:
+    """운영자 자연어 메시지에서 (target_date, notes) 추출.
+
+    upcoming: [{date, slot_1, slot_2}, ...] (가까운 순)
+    Returns: {"target_date": "YYYY-MM-DD" or null, "notes": str}
+    target_date 추정 못 하면 가장 가까운 일정으로. notes 빈 문자열이면 의도 X.
+    """
+    schedules_text = "\n".join(
+        f"- {s.get('date')}: 1부 {s.get('slot_1','—')} / 2부 {s.get('slot_2','—')}"
+        for s in upcoming[:6]
+    ) or "(다가올 일정 없음)"
+
+    sys = (
+        "운영자가 다가올 세미나 한 회차의 운영 안내(장소/시간 변경/회식/특이사항)를 입력했다.\n"
+        "JSON으로만 응답:\n"
+        '{"target_date": "YYYY-MM-DD" or null, "notes": "장소/시간 등 안내 본문 (한국어)"}\n\n'
+        "규칙:\n"
+        "- 날짜 힌트('이번 주', '다음 주', '5/14') → target_date 결정. 모호하면 가장 가까운 일정 사용.\n"
+        "- '이번주', '이번에' → 가장 가까운 일정 날짜.\n"
+        "- notes는 핵심만 간결히 (시간/장소/특이사항).\n"
+        "- 안내 의도 없으면 {\"target_date\": null, \"notes\": \"\"}."
+    )
+    user_block = f"오늘: {today}\n\n다가올 일정:\n{schedules_text}\n\n입력: {user_message}"
+
+    resp = _client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "system", "content": sys}, {"role": "user", "content": user_block}],
+        temperature=0.1,
+        response_format={"type": "json_object"},
+        max_tokens=400,
+    )
+    raw = resp.choices[0].message.content or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = {}
+    return {
+        "target_date": data.get("target_date") or None,
+        "notes": (data.get("notes") or "").strip(),
+    }
+
+
 def extract_topic(user_message: str) -> str:
     """자연어 DM 에서 발표 토픽 본문만 깔끔히 추출. 토픽 의도 없으면 빈 문자열."""
     sys = (
@@ -543,6 +592,8 @@ route_intent tool을 반드시 한 번 호출한다.
 - schedule_question: 일정/발표자에 대한 단순 조회. (예: '내 차례 언제?', '5/21 누구?')
 - material_question: 발표 자료 내용에 대한 질문 (자료 검색 미리보기 참조).
 - topic_registration: 본인이 다룰 토픽을 알리려는 의사. (예: '이번에 LLM agent 발표할게요', '내 토픽은 RAG 비교')
+- seminar_note: 특정 회차의 운영 안내 (장소/시간 변경/회식 등). 운영자만 의도 있음.
+  예: "이번주 회의실 B로 변경", "5/14는 14:30 시작", "다음주 휴무"
 - other: 인사, 잡담, 봇 사용법, 또는 검색 미리보기가 부적합하면 여기.
   fallback_reply에 친근하게 답하되, 자료에 없는 정보는 자체 지식으로 답하지 말고 안내만.{hits_block}"""
 

@@ -58,6 +58,7 @@ class Schedule:
     status: str = "예정"                  # 예정 / 완료 / 취소
     slot_1_topic: str | None = None
     slot_2_topic: str | None = None
+    notes: str | None = None                # 운영자 자유 노트 (장소/시간 변경/특이사항)
 
     def presenters(self) -> list[str]:
         return [s for s in (self.slot_1, self.slot_2) if s]
