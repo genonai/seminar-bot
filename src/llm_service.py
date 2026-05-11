@@ -460,25 +460,51 @@ def extract_seminar_note(
     }
 
 
-def extract_topic(user_message: str) -> str:
-    """자연어 DM 에서 발표 토픽 본문만 깔끔히 추출. 토픽 의도 없으면 빈 문자열."""
+def extract_topic(user_message: str, *, history: list[dict[str, Any]] | None = None) -> dict[str, str | None]:
+    """자연어 DM 에서 발표 토픽 정보 추출.
+
+    Returns: {"target_presenter": "이름" or None, "topic": "본문 or ''"}
+
+    target_presenter:
+      - 메시지가 다른 사람 토픽을 지정 (예: '허성환은 pydanticAI', 'X님 토픽은 Y') 시 이름 추출
+      - 본인 토픽 ('내 토픽은 X', 단순 'X') → null
+      - history 에 봇이 특정 발표자 언급했고 사용자가 짧게 답하면 그 발표자로 추론
+    """
     sys = (
-        "사용자가 자기 발표 토픽을 알리려고 한다. 메시지에서 토픽 본문만 한 줄로 깔끔하게 추출하라.\n"
-        "- 인사말('안녕하세요', '네' 등) 제외\n"
-        "- '내 토픽은', '이번에', '발표할게요' 같은 wrapping 표현 제거\n"
-        "- 토픽 의도가 없거나 모호하면 빈 문자열 반환\n"
-        "- 결과만 출력 (따옴표/설명/접두사 없이)"
+        "사용자 DM 메시지에서 발표 토픽 정보를 JSON으로 추출:\n"
+        '{"target_presenter": "이름 (한국어)" or null, "topic": "토픽 본문 한 줄"}\n\n'
+        "추출 규칙:\n"
+        "- 'X은 Y', 'X님은 Y', 'X 토픽 Y' 형태 → target_presenter=X, topic=Y\n"
+        "- '내 토픽은 Y', '이번에 Y', 단순 'Y' → target_presenter=null (자기 자신)\n"
+        "- 직전 대화 history 에 봇이 특정 발표자 거론했고 짧은 답이 오면 그 발표자로 추정\n"
+        "- 토픽 의도 없거나 모호하면 {\"target_presenter\": null, \"topic\": \"\"}\n"
+        "- 인사/접두사/감탄사 제거, topic은 핵심만"
     )
+    msgs: list[dict[str, Any]] = [{"role": "system", "content": sys}]
+    if history:
+        msgs.extend(history)
+    msgs.append({"role": "user", "content": user_message})
+
     resp = _client().chat.completions.create(
         model=LLM_MODEL,
-        messages=[{"role": "system", "content": sys}, {"role": "user", "content": user_message}],
+        messages=msgs,
         temperature=0.1,
-        max_tokens=200,
+        response_format={"type": "json_object"},
+        max_tokens=300,
     )
-    txt = (resp.choices[0].message.content or "").strip().strip('"').strip("'")
-    # 한 줄로 정리
-    txt = " ".join(txt.split())
-    return txt[:500]
+    raw = resp.choices[0].message.content or "{}"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = {}
+    topic = (data.get("topic") or "").strip().strip('"').strip("'")
+    topic = " ".join(topic.split())[:500]
+    target = data.get("target_presenter")
+    if target and isinstance(target, str):
+        target = target.strip()
+    else:
+        target = None
+    return {"target_presenter": target, "topic": topic}
 
 
 def synthesize_rag_answer(

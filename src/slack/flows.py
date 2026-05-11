@@ -12,7 +12,7 @@ from typing import Any
 
 from slack_sdk import WebClient
 
-from .. import llm_service
+from .. import agent, llm_service
 from ..config import ADMIN_JJR, BROADCAST_CHANNELS, CHANNEL_ID, DB_PATH
 from ..db import session
 from ..models import Preferences
@@ -319,51 +319,15 @@ def handle_dm_message(
                 )
             return
 
-        # ─── active draft 없음 → 의도 라우팅 ───
-        member = member_service.get_by_slack_id(conn, slack_user_id)
-        is_admin_user = admin_service.is_admin(slack_user_id)
-        if member is None and not is_admin_user:
-            client.chat_postMessage(
-                channel=channel,
-                text="발표 멤버가 아니어서 응답이 어렵습니다. 운영자에게 문의해주세요.",
-            )
-            return
-        # 사전 벡터 검색 — 사용자 메시지가 인입된 자료와 관련 있는지 router 가 거리 보고 판단.
-        # 자료 0개거나 검색 실패하면 빈 리스트, router는 그 정보로 other 쪽으로 기울임.
-        # 검색 결과는 material_question 분기에서 재활용 (중복 검색 안 함).
-        try:
-            prefetch_hits = vector_service.search(text, limit=5)
-        except Exception as e:
-            log.warning("intent prefetch search 실패 (계속 진행): %s", e)
-            prefetch_hits = []
-
+        # ─── active draft 없음 → agent (tool calling) ───
         history = conversation_service.get_history(conn, slack_user_id, limit=15)
-        # 방금 추가한 user 메시지가 마지막에 있을 수 있으므로 제거 (classify가 user_message로 받음)
         if history and history[-1].get("role") == "user" and history[-1].get("content") == text:
             history = history[:-1]
-        intent = llm_service.classify_intent(
-            text, retrieved_hits=prefetch_hits, history=history,
+        agent.run(
+            client, conn,
+            slack_user_id=slack_user_id, dm_channel=channel,
+            user_message=text, history=history, today=today,
         )
-        log.info("DM router → intent=%s hits=%d hist=%d user=%s text=%r",
-                 intent.intent, len(prefetch_hits), len(history), slack_user_id, text[:80])
-
-        if intent.intent == "defer":
-            _begin_defer_in_dm(client, conn, slack_user_id, channel, text, today)
-        elif intent.intent == "preference":
-            _begin_preference_in_dm(client, conn, slack_user_id, channel, text)
-        elif intent.intent == "schedule_question":
-            _answer_schedule(client, conn, slack_user_id, channel, text, today)
-        elif intent.intent == "material_question":
-            _answer_material(client, channel, text, prefetched_hits=prefetch_hits)
-        elif intent.intent == "topic_registration":
-            _register_topic_from_dm(client, conn, slack_user_id, channel, text, today)
-        elif intent.intent == "seminar_note":
-            _save_seminar_note(client, conn, slack_user_id, channel, text, today)
-        else:
-            reply = intent.fallback_reply or (
-                "어떤 도움이 필요하신가요? 발표 연기, 선호도 등록, 일정 조회, 자료 질문 같은 걸 도와드려요."
-            )
-            client.chat_postMessage(channel=channel, text=reply)
 
 
 # ─────────────────────────────────────────────────────────────
