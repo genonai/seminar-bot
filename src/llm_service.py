@@ -261,12 +261,21 @@ def chat_turn(
 # ─────────────────────────────────────────────────────────────
 # Intent classification (free-form DM 라우팅)
 # ─────────────────────────────────────────────────────────────
-def classify_intent(user_message: str) -> IntentResult:
-    """tool_choice 강제로 route_intent 한 번 호출시키고 결과 추출."""
+def classify_intent(
+    user_message: str,
+    *,
+    retrieved_hits: list[dict[str, Any]] | None = None,
+) -> IntentResult:
+    """tool_choice 강제로 route_intent 한 번 호출시키고 결과 추출.
+
+    retrieved_hits: 사용자 메시지를 미리 벡터 검색한 top-k. router가 "사용자 질문이
+        실제 자료와 관련 있는지" 거리 + 스니펫 보고 판단 → material_question 정확도 ↑.
+        prompt 크기는 hit 개수에 비례 (자료 총개수와 무관) → 스케일 OK.
+    """
     resp = _client().chat.completions.create(
         model=LLM_MODEL,
         messages=[
-            {"role": "system", "content": intent_router_system_prompt()},
+            {"role": "system", "content": intent_router_system_prompt(retrieved_hits)},
             {"role": "user", "content": user_message},
         ],
         tools=[ROUTE_INTENT_TOOL],
@@ -482,17 +491,37 @@ def defer_system_prompt(
 - 사용자가 명시 안 한 필드는 직전 값 유지"""
 
 
-def intent_router_system_prompt() -> str:
-    return """당신은 Genon AI 주간 세미나 운영 봇이다.
+def intent_router_system_prompt(retrieved_hits: list[dict[str, Any]] | None = None) -> str:
+    hits_block = ""
+    if retrieved_hits:
+        lines = []
+        for h in retrieved_hits[:5]:
+            dist = h.get("_distance")
+            dist_str = f"dist={dist:.2f}" if isinstance(dist, (int, float)) else "dist=?"
+            snippet = (h.get("page_summary") or h.get("content") or "")[:200].replace("\n", " ")
+            lines.append(
+                f"- [{dist_str}] {h.get('presenter','?')} / {h.get('seminar_date','?')} / "
+                f"p.{h.get('page_number','?')} / {h.get('title','')} :: {snippet}"
+            )
+        hits_block = (
+            "\n\n# 사용자 메시지로 자료 벡터 검색 미리보기 (top-5)\n"
+            + "\n".join(lines)
+            + "\n\n# 활용 규칙\n"
+            "위 히트의 거리(distance)가 낮고(<1.0 정도) 사용자 메시지와 명백히 관련 있으면 material_question.\n"
+            "거리가 크거나(>1.3) 사용자가 자료를 묻는 게 아닌 듯하면 other / schedule_question / defer / preference."
+        )
+
+    return f"""당신은 Genon AI 주간 세미나 운영 봇이다.
 사용자가 슬랙 DM으로 보낸 메시지의 의도를 분류한다.
 route_intent tool을 반드시 한 번 호출한다.
 
 분류 가이드
 - defer: 본인 발표를 연기하고 싶다는 의사가 보임. "못해", "휴가", "미뤄줘", "변경", 날짜 + 부정문 등.
 - preference: 평상시 발표 선호 등록 (예: "월말 회피", "1부 선호", "5월 둘째주 휴가 예정")
-- schedule_question: 일정/발표자에 대한 단순 조회. 변경 의사 없음. (예: '내 차례 언제?', '5/21 누구?')
-- material_question: 발표 *자료 내용*에 대한 질문. 발표 자료에 들어간 모델/방법/숫자/요약 등. (예: 'X가 어떤 모델 썼어?', '지난주 발표 요약', 'LLM agent 자료에서 핵심 포인트')
-- other: 인사, 잡담, 봇 사용법 질문, 모호하면 여기. fallback_reply에 친근하게 답한다."""
+- schedule_question: 일정/발표자에 대한 단순 조회. (예: '내 차례 언제?', '5/21 누구?')
+- material_question: 발표 자료 내용에 대한 질문 (자료 검색 미리보기 참조).
+- other: 인사, 잡담, 봇 사용법, 또는 검색 미리보기가 부적합하면 여기.
+  fallback_reply에 친근하게 답하되, 자료에 없는 정보는 자체 지식으로 답하지 말고 안내만.{hits_block}"""
 
 
 def schedule_qa_system_prompt(

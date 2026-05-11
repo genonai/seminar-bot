@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date
+from typing import Any
 
 from slack_sdk import WebClient
 
@@ -291,8 +292,18 @@ def handle_dm_message(
                 text="발표 멤버가 아니어서 응답이 어렵습니다. 운영자에게 문의해주세요.",
             )
             return
-        intent = llm_service.classify_intent(text)
-        log.info("DM router → intent=%s for user=%s text=%r", intent.intent, slack_user_id, text[:80])
+        # 사전 벡터 검색 — 사용자 메시지가 인입된 자료와 관련 있는지 router 가 거리 보고 판단.
+        # 자료 0개거나 검색 실패하면 빈 리스트, router는 그 정보로 other 쪽으로 기울임.
+        # 검색 결과는 material_question 분기에서 재활용 (중복 검색 안 함).
+        try:
+            prefetch_hits = vector_service.search(text, limit=5)
+        except Exception as e:
+            log.warning("intent prefetch search 실패 (계속 진행): %s", e)
+            prefetch_hits = []
+
+        intent = llm_service.classify_intent(text, retrieved_hits=prefetch_hits)
+        log.info("DM router → intent=%s hits=%d for user=%s text=%r",
+                 intent.intent, len(prefetch_hits), slack_user_id, text[:80])
 
         if intent.intent == "defer":
             _begin_defer_in_dm(client, conn, slack_user_id, channel, text, today)
@@ -301,7 +312,7 @@ def handle_dm_message(
         elif intent.intent == "schedule_question":
             _answer_schedule(client, conn, slack_user_id, channel, text, today)
         elif intent.intent == "material_question":
-            _answer_material(client, channel, text)
+            _answer_material(client, channel, text, prefetched_hits=prefetch_hits)
         else:
             reply = intent.fallback_reply or (
                 "어떤 도움이 필요하신가요? 발표 연기, 선호도 등록, 일정 조회, 자료 질문 같은 걸 도와드려요."
@@ -391,17 +402,25 @@ def _answer_schedule(
         client.chat_postMessage(channel=dm_channel, text=answer)
 
 
-def _answer_material(client: WebClient, dm_channel: str, text: str) -> None:
-    """RAG: Weaviate 검색 → LLM 합성 → DM 회신."""
-    try:
-        retrieved = vector_service.search(text, limit=5)
-    except Exception as e:
-        log.exception("vector search 실패")
-        client.chat_postMessage(
-            channel=dm_channel,
-            text=f":warning: 자료 검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요. ({e})",
-        )
-        return
+def _answer_material(
+    client: WebClient,
+    dm_channel: str,
+    text: str,
+    *,
+    prefetched_hits: list[dict[str, Any]] | None = None,
+) -> None:
+    """RAG: ChromaDB 검색 → LLM 합성 → DM 회신. intent 단계에서 prefetch한 결과가 있으면 재활용."""
+    retrieved = prefetched_hits
+    if retrieved is None:
+        try:
+            retrieved = vector_service.search(text, limit=5)
+        except Exception as e:
+            log.exception("vector search 실패")
+            client.chat_postMessage(
+                channel=dm_channel,
+                text=f":warning: 자료 검색 중 오류가 발생했습니다. ({e})",
+            )
+            return
 
     if not retrieved:
         client.chat_postMessage(
