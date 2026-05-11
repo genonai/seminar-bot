@@ -2,7 +2,7 @@
 
 지우는 것:
   1) submissions 테이블의 모든 row
-  2) submission_pages 테이블의 모든 row (벡터 청크)
+  2) ChromaDB 'seminar_pages' 컬렉션 전체 (벡터 청크)
   3) data/submissions/ 디렉토리의 모든 PDF 파일
 
 옵션:
@@ -50,9 +50,9 @@ def _wipe_one(sid: int, confirm: bool) -> None:
         conn.execute("DELETE FROM submissions WHERE id = ?", (sid,))
         conn.commit()
 
-    # submission_pages (벡터 청크)
+    # ChromaDB 청크
     deleted = vector_service.delete_submission(sid)
-    print(f"  submission_pages {deleted}개 삭제")
+    print(f"  ChromaDB 청크 {deleted}개 삭제")
     print(f"[wipe] submission {sid} 정리 완료")
 
 
@@ -73,11 +73,14 @@ def _wipe_all(confirm: bool) -> None:
     # 1) DB
     with session(DB_PATH) as conn:
         with conn:
-            conn.execute("DELETE FROM submission_pages")
             conn.execute("DELETE FROM submissions")
-    print("[wipe] submissions + submission_pages 테이블 비움")
+    print("[wipe] submissions 테이블 비움")
 
-    # 2) 파일
+    # 2) ChromaDB
+    vector_service.reset_all()
+    print("[wipe] ChromaDB 컬렉션 reset")
+
+    # 3) 파일
     if subs_root.exists():
         shutil.rmtree(subs_root)
         print(f"[wipe] {subs_root} 삭제")

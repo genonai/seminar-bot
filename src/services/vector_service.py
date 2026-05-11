@@ -1,31 +1,78 @@
-"""SQLite + numpy 기반 벡터 스토어.
+"""ChromaDB 기반 vector store.
 
-Weaviate 등 외부 서비스 의존성 제거. 우리 스케일(연 100 자료 × 50 페이지
-≈ 5000 벡터)에서 cosine 검색 ~100ms 수준이라 충분.
+embedded (별도 서비스 X). HNSW 인덱스로 native vector search.
+BYOV (Bring Your Own Vector) — GenOS embed_service 로 만든 벡터 직접 주입.
 
-저장: submission_pages 테이블의 BLOB 컬럼에 float32 raw bytes.
-검색: 전체 벡터 메모리 로드 → numpy dot → top-k.
+저장 위치: {DB_PATH 부모}/chroma/  (호스트 볼륨에 mount되어 영속).
 """
 from __future__ import annotations
 
-import json
 import logging
-import sqlite3
 from datetime import date
+from pathlib import Path
 from typing import Any
 
-import numpy as np
+import chromadb
+from chromadb.api.types import EmbeddingFunction
 
 from .. import embed_service
-from ..config import DB_PATH, EMBEDDING_DIMENSIONS
-from ..db import session
+from ..config import DB_PATH
 
 log = logging.getLogger(__name__)
 
+COLLECTION_NAME = "seminar_pages"
+CHROMA_PATH = str(Path(DB_PATH).parent / "chroma")
+
+_client: chromadb.PersistentClient | None = None
+
+
+class _BYOVEmbed(EmbeddingFunction):
+    """BYOV 명시 — chromadb가 기본 ONNX 모델 로드 시도하는 걸 막음."""
+    def __call__(self, input):
+        raise RuntimeError("BYOV: embeddings must be provided explicitly via add(embeddings=...)")
+
+
+def _get_client() -> chromadb.PersistentClient:
+    global _client
+    if _client is None:
+        Path(CHROMA_PATH).mkdir(parents=True, exist_ok=True)
+        _client = chromadb.PersistentClient(path=CHROMA_PATH)
+        log.info("ChromaDB persistent client opened: %s", CHROMA_PATH)
+    return _client
+
+
+def _get_collection():
+    return _get_client().get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+        embedding_function=_BYOVEmbed(),
+    )
+
 
 def ensure_collection() -> None:
-    """no-op — DB 스키마는 db.init_schema에서 보장."""
-    return None
+    _get_collection()
+
+
+def _meta_for_page(*, submission_id: int, presenter: str, seminar_date: date,
+                   title: str, page_number: int, tags: list[str],
+                   page: dict[str, Any]) -> dict[str, Any]:
+    """Chroma는 metadata 가 scalar (str/int/float/bool)만 허용 → list는 join."""
+    ent_names = [
+        e.get("name", "") for e in (page.get("entities") or [])
+        if isinstance(e, dict) and e.get("name")
+    ]
+    key_points = list(page.get("key_points") or [])
+    return {
+        "submission_id": int(submission_id),
+        "presenter": presenter,
+        "seminar_date": seminar_date.isoformat(),
+        "title": title or "",
+        "page_number": int(page_number),
+        "tags": ", ".join(tags)[:500],
+        "entities": ", ".join(ent_names)[:500],
+        "key_points": " · ".join(key_points)[:500],
+        "page_summary": (page.get("page_summary") or "")[:1000],
+    }
 
 
 def insert_pages(
@@ -52,112 +99,92 @@ def insert_pages(
     if not vectors:
         return 0
 
-    tags_json = json.dumps(list(tags), ensure_ascii=False)
+    coll = _get_collection()
 
-    with session(DB_PATH) as conn:
-        with conn:
-            conn.execute(
-                "DELETE FROM submission_pages WHERE submission_id = ?",
-                (submission_id,),
-            )
-            for p, content, vec in zip(pages, contents, vectors):
-                ent_names = [
-                    e.get("name", "") for e in (p.get("entities") or [])
-                    if isinstance(e, dict)
-                ]
-                vec_blob = np.asarray(vec, dtype=np.float32).tobytes()
-                conn.execute(
-                    """
-                    INSERT INTO submission_pages
-                      (submission_id, presenter, seminar_date, title, page_number, content,
-                       text_content, visual_description, page_summary,
-                       key_points, entities, tags, vector)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        submission_id,
-                        presenter,
-                        seminar_date.isoformat(),
-                        title,
-                        int(p.get("page_number", 0)),
-                        content,
-                        p.get("text_content", ""),
-                        p.get("visual_description", ""),
-                        p.get("page_summary", ""),
-                        json.dumps(p.get("key_points") or [], ensure_ascii=False),
-                        json.dumps(ent_names, ensure_ascii=False),
-                        tags_json,
-                        vec_blob,
-                    ),
-                )
+    # 같은 submission 기존 데이터 제거 (재처리 대비)
+    try:
+        coll.delete(where={"submission_id": int(submission_id)})
+    except Exception as e:
+        log.debug("delete-before-insert no-op: %s", e)
+
+    ids = [f"s{submission_id}_p{p.get('page_number', i+1)}" for i, p in enumerate(pages)]
+    metadatas = [
+        _meta_for_page(
+            submission_id=submission_id, presenter=presenter,
+            seminar_date=seminar_date, title=title,
+            page_number=p.get("page_number", i+1),
+            tags=tags, page=p,
+        )
+        for i, p in enumerate(pages)
+    ]
+
+    coll.add(
+        ids=ids,
+        embeddings=vectors,
+        documents=contents,
+        metadatas=metadatas,
+    )
     return len(pages)
 
 
 def search(query: str, *, limit: int = 5) -> list[dict[str, Any]]:
-    """cosine similarity top-k."""
-    q = np.asarray(embed_service.embed(query), dtype=np.float32)
-    qn = float(np.linalg.norm(q))
-    if qn == 0:
-        return []
-
-    with session(DB_PATH) as conn:
-        rows = conn.execute(
-            """
-            SELECT id, submission_id, presenter, seminar_date, title, page_number,
-                   content, page_summary, key_points, entities, vector
-            FROM submission_pages
-            """
-        ).fetchall()
-
-    if not rows:
-        return []
-
-    # 벡터 매트릭스 구성 (N × dim)
-    matrix = np.frombuffer(
-        b"".join(r["vector"] for r in rows),
-        dtype=np.float32,
-    ).reshape(len(rows), -1)
-
-    if matrix.shape[1] != EMBEDDING_DIMENSIONS:
-        log.warning(
-            "vector dim mismatch in DB: expected %d, got %d",
-            EMBEDDING_DIMENSIONS, matrix.shape[1],
-        )
-
-    norms = np.linalg.norm(matrix, axis=1)
-    norms[norms == 0] = 1.0   # 0 분모 회피
-    sims = (matrix @ q) / (norms * qn)
-    top_idx = np.argsort(-sims)[:limit]
-
+    """cosine top-k. BYOV — query 텍스트를 embed_service 로 변환."""
+    coll = _get_collection()
+    q_vec = embed_service.embed(query)
+    res = coll.query(
+        query_embeddings=[q_vec],
+        n_results=limit,
+        include=["documents", "metadatas", "distances"],
+    )
     out: list[dict[str, Any]] = []
-    for i in top_idx:
-        r = rows[int(i)]
+    if not res.get("ids") or not res["ids"][0]:
+        return out
+
+    docs = res["documents"][0] if res.get("documents") else [""] * len(res["ids"][0])
+    metas = res["metadatas"][0] if res.get("metadatas") else [{}] * len(res["ids"][0])
+    dists = res["distances"][0] if res.get("distances") else [None] * len(res["ids"][0])
+
+    for doc, meta, dist in zip(docs, metas, dists):
+        meta = meta or {}
         out.append({
-            "submission_id": r["submission_id"],
-            "presenter": r["presenter"],
-            "seminar_date": r["seminar_date"],
-            "title": r["title"],
-            "page_number": r["page_number"],
-            "content": r["content"],
-            "page_summary": r["page_summary"],
-            "key_points": json.loads(r["key_points"]) if r["key_points"] else [],
-            "entities": json.loads(r["entities"]) if r["entities"] else [],
-            "_similarity": float(sims[int(i)]),
+            "submission_id": meta.get("submission_id"),
+            "presenter": meta.get("presenter"),
+            "seminar_date": meta.get("seminar_date"),
+            "title": meta.get("title"),
+            "page_number": meta.get("page_number"),
+            "page_summary": meta.get("page_summary"),
+            "content": doc,
+            "key_points": (meta.get("key_points") or "").split(" · "),
+            "entities": (meta.get("entities") or "").split(", "),
+            "_distance": dist,
         })
     return out
 
 
 def delete_submission(submission_id: int) -> int:
-    with session(DB_PATH) as conn:
-        with conn:
-            cur = conn.execute(
-                "DELETE FROM submission_pages WHERE submission_id = ?",
-                (submission_id,),
-            )
-            return cur.rowcount or 0
+    """submission 한 개 분량 청크 전부 삭제."""
+    coll = _get_collection()
+    try:
+        # 카운트 먼저 (반환용)
+        before = coll.get(where={"submission_id": int(submission_id)}, include=[])
+        n = len(before.get("ids") or [])
+        coll.delete(where={"submission_id": int(submission_id)})
+        return n
+    except Exception as e:
+        log.warning("delete_submission(%d) 실패: %s", submission_id, e)
+        return 0
 
 
 def count_pages() -> int:
-    with session(DB_PATH) as conn:
-        row = conn.execute("SELECT COUNT(*) AS c FROM submission_pages").fetchone()
-        return int(row["c"])
+    coll = _get_collection()
+    return coll.count()
+
+
+def reset_all() -> None:
+    """전체 컬렉션 폐기. wipe_submissions 에서 사용."""
+    client = _get_client()
+    try:
+        client.delete_collection(COLLECTION_NAME)
+        log.info("ChromaDB collection %s deleted", COLLECTION_NAME)
+    except Exception as e:
+        log.debug("reset_all no-op: %s", e)
