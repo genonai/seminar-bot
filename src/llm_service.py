@@ -15,7 +15,14 @@ from typing import Any
 
 from openai import OpenAI
 
-from .config import LLM_API_BASE_URL, LLM_API_KEY, LLM_MODEL, VLM_MODEL
+from .config import (
+    LLM_API_BASE_URL,
+    LLM_API_KEY,
+    LLM_MODEL,
+    VLM_API_BASE_URL,
+    VLM_API_KEY,
+    VLM_MODEL,
+)
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +157,37 @@ def _client() -> OpenAI:
     return OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE_URL)
 
 
+def _vlm_client() -> OpenAI:
+    if not VLM_API_KEY:
+        raise RuntimeError("VLM_API_KEY 미설정 (.env 확인)")
+    return OpenAI(api_key=VLM_API_KEY, base_url=VLM_API_BASE_URL)
+
+
+_vlm_model_cache: str | None = None
+
+
+def _resolve_vlm_model() -> str:
+    """VLM_MODEL이 GenOS 숫자 id ('689' 등) 또는 비어있으면 /v1/models 첫 결과로 해석."""
+    global _vlm_model_cache
+    if _vlm_model_cache:
+        return _vlm_model_cache
+    if VLM_MODEL and not VLM_MODEL.isdigit() and "/" in VLM_MODEL:
+        # OpenRouter 형식 (provider/model-name)
+        _vlm_model_cache = VLM_MODEL
+        return _vlm_model_cache
+    # GenOS 또는 비어있음 → models.list
+    try:
+        resp = _vlm_client().models.list()
+        if resp.data:
+            _vlm_model_cache = resp.data[0].id
+            log.info("VLM model resolved: %s", _vlm_model_cache)
+            return _vlm_model_cache
+    except Exception as e:
+        log.warning("VLM models.list 실패 (%s), VLM_MODEL=%s 그대로 사용", e, VLM_MODEL)
+    _vlm_model_cache = VLM_MODEL
+    return _vlm_model_cache
+
+
 def chat_turn(
     *,
     system_prompt: str,
@@ -278,13 +316,13 @@ def vlm_extract_page(image_b64: str, *, page_number: int, hint: str = "") -> dic
             "entities": [{"name": "string", "type": "person|model|dataset|tool|concept|paper|other"}],
         }, ensure_ascii=False, indent=2)
     )
-    resp = _client().chat.completions.create(
-        model=VLM_MODEL,
+    resp = _vlm_client().chat.completions.create(
+        model=_resolve_vlm_model(),
         messages=[
             {"role": "system", "content": sys},
             {"role": "user", "content": [
                 {"type": "text", "text": user_text},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
             ]},
         ],
         temperature=0.1,
