@@ -1,114 +1,70 @@
-"""사내 GenOS 임베딩 endpoint 래퍼.
+"""사내 GenOS 임베딩 endpoint — OpenAI 호환.
 
-호출 포맷 (OpenAI 호환 아님):
-  POST {base}/api/serving/{serving_id}/{serving_rev_id}
-  Headers: Authorization: Bearer {key}
-  Body: {"message": "텍스트", "serving_id": int, "serving_rev_id": int}
+base_url 형식: https://<host>/api/gateway/rep/serving/{serving_id}/v1
+GET /v1/models 로 동적으로 모델 id 발견 (없으면 EMBEDDING_MODEL env 사용).
 
-응답 shape는 명시되지 않아 여러 형태 대응 (data[0].embedding / embedding / embeddings / result).
+EMBEDDING_API_BASE_URL 에 serving_id 까지 포함된 full base URL 을 넣는 게 가장 단순:
+  https://genos.genon.ai/api/gateway/rep/serving/10/v1
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
+import threading
 
-import httpx
+from openai import OpenAI
 
 from .config import (
     EMBEDDING_API_BASE_URL,
     EMBEDDING_API_KEY,
-    EMBEDDING_SERVING_ID,
-    EMBEDDING_SERVING_REV_ID,
+    EMBEDDING_MODEL,
 )
 
 log = logging.getLogger(__name__)
 
-_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
+_model_cache: str | None = None
+_model_lock = threading.Lock()
 
 
-def _endpoint() -> str:
-    return (
-        f"{EMBEDDING_API_BASE_URL.rstrip('/')}"
-        f"/api/serving/{EMBEDDING_SERVING_ID}/{EMBEDDING_SERVING_REV_ID}"
-    )
+def _client() -> OpenAI:
+    if not EMBEDDING_API_KEY:
+        raise RuntimeError("EMBEDDING_API_KEY 미설정 (.env)")
+    return OpenAI(api_key=EMBEDDING_API_KEY, base_url=EMBEDDING_API_BASE_URL)
 
 
-def _extract_vector(data: Any) -> list[float]:
-    """다양한 GenOS 응답 shape에서 임베딩 벡터 추출."""
-    if isinstance(data, list) and data and isinstance(data[0], (int, float)):
-        return [float(x) for x in data]
-    if not isinstance(data, dict):
-        raise ValueError(f"임베딩 응답 type 미지원: {type(data).__name__}")
-
-    # 1) OpenAI 호환: {data: [{embedding: [...]}]}
-    if "data" in data and data["data"]:
-        d0 = data["data"][0]
-        if isinstance(d0, dict) and "embedding" in d0:
-            return [float(x) for x in d0["embedding"]]
-
-    # 2) {embedding: [...]}
-    if "embedding" in data and isinstance(data["embedding"], list):
-        return [float(x) for x in data["embedding"]]
-
-    # 3) {embeddings: [[...]]}
-    if "embeddings" in data and data["embeddings"]:
-        first = data["embeddings"][0]
-        if isinstance(first, list):
-            return [float(x) for x in first]
-
-    # 4) {result: [...]} 또는 {result: {embedding: [...]}}
-    if "result" in data:
-        r = data["result"]
-        if isinstance(r, list) and r and isinstance(r[0], (int, float)):
-            return [float(x) for x in r]
-        if isinstance(r, dict) and "embedding" in r:
-            return [float(x) for x in r["embedding"]]
-        if isinstance(r, list) and r and isinstance(r[0], list):
-            return [float(x) for x in r[0]]
-
-    # 5) {response: {...}} 으로 한 번 wrapping된 경우
-    if "response" in data:
-        return _extract_vector(data["response"])
-
-    raise ValueError(
-        f"임베딩 응답 shape 미지원: keys={list(data.keys())}"
-    )
+def _resolve_model() -> str:
+    """모델 id 결정. env에 명시 있으면 그거 (단 'bge-m3' 같은 placeholder는 무시),
+    아니면 GET /v1/models 첫 결과를 캐싱."""
+    global _model_cache
+    if _model_cache:
+        return _model_cache
+    with _model_lock:
+        if _model_cache:
+            return _model_cache
+        # GenOS는 model id 가 serving_rev_id (e.g. '559') 형태. EMBEDDING_MODEL이
+        # 그 형태(숫자)면 그대로 신뢰, 아니면 동적 발견.
+        if EMBEDDING_MODEL and EMBEDDING_MODEL.isdigit():
+            _model_cache = EMBEDDING_MODEL
+            return _model_cache
+        resp = _client().models.list()
+        if not resp.data:
+            raise RuntimeError("GenOS /v1/models 응답에 model 없음")
+        _model_cache = resp.data[0].id
+        log.info("embedding model resolved: %s", _model_cache)
+        return _model_cache
 
 
 def embed(text: str) -> list[float]:
-    if not EMBEDDING_API_KEY:
-        raise RuntimeError("EMBEDDING_API_KEY 미설정 (.env)")
-    payload = {
-        "message": text,
-        "serving_id": EMBEDDING_SERVING_ID,
-        "serving_rev_id": EMBEDDING_SERVING_REV_ID,
-    }
-    headers = {
-        "Authorization": f"Bearer {EMBEDDING_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    url = _endpoint()
-    with httpx.Client(timeout=_TIMEOUT, verify=True) as h:
-        r = h.post(url, json=payload, headers=headers)
-        if r.status_code >= 400:
-            raise RuntimeError(
-                f"embed HTTP {r.status_code} {url}: {r.text[:500]}"
-            )
-        try:
-            data = r.json()
-        except Exception as e:
-            raise RuntimeError(f"embed 응답 JSON 파싱 실패: {e} body={r.text[:500]}") from e
-    return _extract_vector(data)
+    model = _resolve_model()
+    resp = _client().embeddings.create(input=text, model=model)
+    return list(resp.data[0].embedding)
 
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
-    """직렬 호출. GenOS가 배치 지원하면 추후 단일 요청으로 최적화."""
-    out: list[list[float]] = []
-    for i, t in enumerate(texts):
-        try:
-            out.append(embed(t))
-        except Exception as e:
-            log.error("embed batch %d/%d 실패: %s — 0 벡터로 채움", i + 1, len(texts), e)
-            from .config import EMBEDDING_DIMENSIONS
-            out.append([0.0] * EMBEDDING_DIMENSIONS)
-    return out
+    if not texts:
+        return []
+    model = _resolve_model()
+    # OpenAI 호환은 input 에 list 허용 — 배치 1회 호출
+    resp = _client().embeddings.create(input=texts, model=model)
+    # data 순서 보장 (index 기준 정렬)
+    items = sorted(resp.data, key=lambda d: d.index)
+    return [list(d.embedding) for d in items]
