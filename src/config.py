@@ -23,8 +23,18 @@ LLM_API_BASE_URL: str = os.getenv("LLM_API_BASE_URL", "https://openrouter.ai/api
 LLM_MODEL: str = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4.5")
 VLM_MODEL: str = os.getenv("VLM_MODEL", "anthropic/claude-sonnet-4.5")
 
-# Weaviate (vector DB) — 181 서버에 이미 떠있는 인스턴스 사용
+# Weaviate (vector DB) — 181 서버에 이미 떠있는 인스턴스 사용 (BYOV: vectorizer 없음)
 WEAVIATE_URL: str = os.getenv("WEAVIATE_URL", "http://localhost:8080")
+
+# Embedding — Weaviate vectorizer 없어서 직접 임베딩 생성.
+# 사내 GenOS 사용: POST {base}/api/serving/{serving_id}/{serving_rev_id}
+# body: {"message": text, "serving_id": int, "serving_rev_id": int}
+EMBEDDING_API_KEY: str | None = os.getenv("EMBEDDING_API_KEY")
+EMBEDDING_API_BASE_URL: str = os.getenv("EMBEDDING_API_BASE_URL", "https://genos.genon.ai")
+EMBEDDING_SERVING_ID: int = int(os.getenv("EMBEDDING_SERVING_ID", "10"))
+EMBEDDING_SERVING_REV_ID: int = int(os.getenv("EMBEDDING_SERVING_REV_ID", "559"))
+EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "bge-m3")            # 문서/로그용 (호출엔 사용 X)
+EMBEDDING_DIMENSIONS: int = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))  # bge-m3 = 1024
 
 CHANNEL_ID: str = os.getenv("CHANNEL_ID", "C0B1XSR0YNN")
 DB_PATH: Path = Path(os.getenv("DB_PATH", "./seminar.db"))

@@ -1,10 +1,9 @@
 """Weaviate (vector DB) 래퍼.
 
-181 서버에 이미 떠있는 인스턴스 사용. 컬렉션 1개:
-  SeminarPage — 페이지 단위 청크 + 풍부한 메타.
-
-Vectorizer는 Weaviate가 자체 모듈로 처리 (text2vec-transformers 가정).
-서버에 다른 모듈 떠있으면 ENV WEAVIATE_VECTORIZER로 override 가능 (text2vec-openai 등).
+181 서버 Weaviate에 vectorizer 모듈이 없어서 BYOV (Bring Your Own Vector):
+  - 컬렉션은 vectorizer=none 으로 생성
+  - insert 시 우리가 GenOS embed_service 로 만든 vector 를 직접 전달
+  - 검색은 query.near_vector() 로 vector 기반
 """
 from __future__ import annotations
 
@@ -17,6 +16,7 @@ import weaviate
 from weaviate.classes.config import Configure, DataType, Property
 from weaviate.classes.query import Filter, MetadataQuery
 
+from .. import embed_service
 from ..config import WEAVIATE_URL
 
 log = logging.getLogger(__name__)
@@ -37,8 +37,8 @@ def _connect() -> weaviate.WeaviateClient:
 
 
 def _vectorizer_config() -> Any:
-    """기본 text2vec-transformers. 181이 다른 모듈이면 여기 분기 추가."""
-    return Configure.Vectorizer.text2vec_transformers()
+    """BYOV — vectorizer 없음. 우리가 vector 직접 제공."""
+    return Configure.Vectorizer.none()
 
 
 def ensure_collection() -> None:
@@ -91,44 +91,54 @@ def insert_pages(
             where=Filter.by_property("submission_id").equal(submission_id)
         )
 
+        # content 텍스트 빌드 → 임베딩 일괄 생성 → insert 시 vector 같이 전달 (BYOV)
+        contents: list[str] = []
+        for p in pages:
+            text_parts = [
+                p.get("page_summary", ""),
+                p.get("text_content", ""),
+                p.get("visual_description", ""),
+                " · ".join(p.get("key_points", [])),
+            ]
+            contents.append("\n".join(part for part in text_parts if part).strip() or " ")
+
+        vectors = embed_service.embed_batch(contents)
+
         with coll.batch.dynamic() as batch:
-            for p in pages:
-                text_parts = [
-                    p.get("page_summary", ""),
-                    p.get("text_content", ""),
-                    p.get("visual_description", ""),
-                    " · ".join(p.get("key_points", [])),
-                ]
-                content = "\n".join(part for part in text_parts if part).strip()
+            for p, content, vec in zip(pages, contents, vectors):
                 ent_names = [e.get("name", "") for e in (p.get("entities") or []) if isinstance(e, dict)]
-                batch.add_object(properties={
-                    "submission_id": submission_id,
-                    "presenter": presenter,
-                    "seminar_date": seminar_date.isoformat(),
-                    "title": title,
-                    "page_number": int(p.get("page_number", 0)),
-                    "content": content or " ",
-                    "text_content": p.get("text_content", ""),
-                    "visual_description": p.get("visual_description", ""),
-                    "page_summary": p.get("page_summary", ""),
-                    "key_points": list(p.get("key_points") or []),
-                    "entities": ent_names,
-                    "tags": list(tags),
-                })
+                batch.add_object(
+                    properties={
+                        "submission_id": submission_id,
+                        "presenter": presenter,
+                        "seminar_date": seminar_date.isoformat(),
+                        "title": title,
+                        "page_number": int(p.get("page_number", 0)),
+                        "content": content,
+                        "text_content": p.get("text_content", ""),
+                        "visual_description": p.get("visual_description", ""),
+                        "page_summary": p.get("page_summary", ""),
+                        "key_points": list(p.get("key_points") or []),
+                        "entities": ent_names,
+                        "tags": list(tags),
+                    },
+                    vector=vec,
+                )
         return len(pages)
     finally:
         client.close()
 
 
 def search(query: str, *, limit: int = 5) -> list[dict[str, Any]]:
-    """semantic search. 결과는 LLM 합성용 dict 리스트."""
+    """BYOV: query 텍스트를 임베딩 → near_vector 검색."""
     client = _connect()
     try:
         if not client.collections.exists(COLLECTION_NAME):
             return []
+        query_vec = embed_service.embed(query)
         coll = client.collections.get(COLLECTION_NAME)
-        result = coll.query.near_text(
-            query=query,
+        result = coll.query.near_vector(
+            near_vector=query_vec,
             limit=limit,
             return_metadata=MetadataQuery(distance=True),
         )
