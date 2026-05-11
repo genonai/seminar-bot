@@ -406,6 +406,27 @@ def extract_document_metadata(
     return data
 
 
+def extract_topic(user_message: str) -> str:
+    """자연어 DM 에서 발표 토픽 본문만 깔끔히 추출. 토픽 의도 없으면 빈 문자열."""
+    sys = (
+        "사용자가 자기 발표 토픽을 알리려고 한다. 메시지에서 토픽 본문만 한 줄로 깔끔하게 추출하라.\n"
+        "- 인사말('안녕하세요', '네' 등) 제외\n"
+        "- '내 토픽은', '이번에', '발표할게요' 같은 wrapping 표현 제거\n"
+        "- 토픽 의도가 없거나 모호하면 빈 문자열 반환\n"
+        "- 결과만 출력 (따옴표/설명/접두사 없이)"
+    )
+    resp = _client().chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "system", "content": sys}, {"role": "user", "content": user_message}],
+        temperature=0.1,
+        max_tokens=200,
+    )
+    txt = (resp.choices[0].message.content or "").strip().strip('"').strip("'")
+    # 한 줄로 정리
+    txt = " ".join(txt.split())
+    return txt[:500]
+
+
 def synthesize_rag_answer(
     *, user_question: str, retrieved: list[dict[str, Any]]
 ) -> str:

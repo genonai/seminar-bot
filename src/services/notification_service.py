@@ -194,3 +194,33 @@ def announce_new_cycle(client: WebClient, schedules: list, cycle_id: int) -> Non
     lines.append("")
     lines.append("선호도 기반 자동 배정. 변경 의견은 운영자에게 알려주세요.")
     broadcast(client, text="\n".join(lines))
+
+
+def ask_for_topics(client: WebClient, conn: sqlite3.Connection, schedules: list) -> None:
+    """새 사이클 추첨 직후, 토픽 없는 각 발표자에게 DM으로 토픽 요청."""
+    from ..slack.messages import fmt_date
+
+    for s in schedules:
+        for slot_name, topic, slot_label in [
+            (s.slot_1, s.slot_1_topic, "1부"),
+            (s.slot_2, s.slot_2_topic, "2부"),
+        ]:
+            if not slot_name or topic:
+                continue
+            m = member_service.get_by_name(conn, slot_name)
+            if m is None:
+                continue
+            try:
+                ch = _open_dm(client, m.slack_user_id)
+                client.chat_postMessage(
+                    channel=ch,
+                    text=(
+                        f":wave: 안녕하세요 *{m.name}*님! *{fmt_date(s.date)} {slot_label}* 발표가 배정됐어요 :tada:\n\n"
+                        "이번에 다룰 토픽 한 줄로 알려주시면 자동 저장됩니다.\n"
+                        "예: _\"LLM agent ReAct vs Reflexion 비교\"_\n"
+                        "수정도 새 메시지 보내시면 됩니다."
+                    ),
+                )
+                log.info("topic ask DM → %s for %s", m.name, s.date)
+            except Exception as e:
+                log.warning("topic ask DM → %s 실패: %s", m.name, e)

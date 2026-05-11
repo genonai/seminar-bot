@@ -124,6 +124,7 @@ def register(app: App) -> None:
             except ValueError as e:
                 respond(text=f":x: 추첨 실패: {e}", response_type="ephemeral")
                 return
+            notification_service.ask_for_topics(client, conn, schedules)
 
         notification_service.announce_new_cycle(client, schedules, new_cid)
         respond(

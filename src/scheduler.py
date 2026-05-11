@@ -62,6 +62,7 @@ def _job_cycle_check(client: WebClient) -> None:
         log.info("cycle_check: 잔여 일정 부족, 사이클 직전 sync + 새 사이클 추첨")
         member_service.sync_from_channel(client, conn)
         cycle_id, schedules = cycle_service.generate_next_cycle(conn, today)
+        notification_service.ask_for_topics(client, conn, schedules)
     notification_service.announce_new_cycle(client, schedules, cycle_id)
     log.info("새 사이클 cycle_id=%d 공지 완료", cycle_id)
 

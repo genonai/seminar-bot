@@ -414,7 +414,7 @@ def _answer_schedule(
 def _register_topic_from_dm(
     client: WebClient, conn, slack_user_id: str, dm_channel: str, text: str, today: date
 ) -> None:
-    """DM 자연어로 토픽 등록. ('내 토픽은 X', '이번에 Y 발표할게요')"""
+    """DM 자연어로 토픽 등록. LLM이 깔끔한 토픽 본문만 추출."""
     assignment = defer_service.find_requester_assignment(conn, slack_user_id, today)
     if assignment is None:
         client.chat_postMessage(
@@ -424,12 +424,17 @@ def _register_topic_from_dm(
         return
     seminar_date, presenter = assignment
 
-    # 메시지에서 토픽 본문만 추출 ("내 토픽은 X" → "X")
-    topic = _extract_topic(text)
+    try:
+        topic = llm_service.extract_topic(text)
+    except Exception as e:
+        log.exception("topic 추출 실패")
+        client.chat_postMessage(channel=dm_channel, text=f":x: 토픽 추출 중 오류 ({e})")
+        return
+
     if not topic:
         client.chat_postMessage(
             channel=dm_channel,
-            text="토픽을 어떻게 적을지 한 줄로 알려주세요. 예: _\"내 토픽은 LLM agent ReAct vs Reflexion 비교\"_",
+            text="토픽이 명확하지 않아요. 한 줄로 알려주세요. 예: _\"LLM agent ReAct vs Reflexion 비교\"_",
         )
         return
 
@@ -437,27 +442,15 @@ def _register_topic_from_dm(
     if ok:
         client.chat_postMessage(
             channel=dm_channel,
-            text=f":white_check_mark: 토픽 저장됨 — *{seminar_date.isoformat()}*: _{topic}_",
+            text=(
+                f":white_check_mark: 토픽 저장됨 — *{seminar_date.isoformat()} ({presenter})*\n"
+                f"> _{topic}_\n"
+                "수정하려면 새 토픽 다시 보내주세요."
+            ),
         )
+        log.info("topic saved via DM: %s / %s → %r", presenter, seminar_date, topic[:80])
     else:
         client.chat_postMessage(channel=dm_channel, text=":x: 토픽 저장 실패. 운영자에게 문의해주세요.")
-
-
-def _extract_topic(text: str) -> str:
-    """간단한 휴리스틱으로 자연어 메시지에서 토픽 본문 추출."""
-    import re
-    patterns = [
-        r"내\s*토픽은\s*[:：]?\s*(.+)$",
-        r"이번\s*토픽\s*[:：]?\s*(.+)$",
-        r"이번에\s+(.+?)(?:\s*발표\s*할게요|\s*발표\s*하려고|\s*해보려고)",
-        r"(?:발표\s*주제|주제)는\s*[:：]?\s*(.+)$",
-    ]
-    for p in patterns:
-        m = re.search(p, text, re.DOTALL)
-        if m:
-            return m.group(1).strip()
-    # 패턴 매칭 안 되면 전체 메시지를 토픽으로 (LLM이 topic_registration 분류했으므로 의도는 명확)
-    return text.strip()
 
 
 def _answer_material(
