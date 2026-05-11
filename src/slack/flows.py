@@ -18,6 +18,7 @@ from ..db import session
 from ..models import Preferences
 from ..services import (
     admin_service,
+    conversation_service,
     defer_service,
     draft_service,
     file_storage,
@@ -33,6 +34,27 @@ from ..services import (
 def _primary_admin() -> str:
     """현재 primary admin slack id (DB 우선, 없으면 env config 폴백)."""
     return admin_service.get_primary_admin_id() or ADMIN_JJR
+
+
+def dm_say(
+    client: WebClient,
+    *,
+    slack_user_id: str,
+    channel: str,
+    text: str,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """봇이 사용자 DM에 메시지 게시 + 대화 메모리에 자동 로그.
+
+    DM channel 안에서만 호출. 채널 broadcast 등은 conversation 로그 대상 아님.
+    """
+    resp = client.chat_postMessage(channel=channel, text=text, **kwargs)
+    try:
+        with session(DB_PATH) as conn:
+            conversation_service.append(conn, slack_user_id, "assistant", text)
+    except Exception as e:
+        log.warning("conversation append (assistant) 실패: %s", e)
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────
@@ -264,6 +286,9 @@ def handle_dm_message(
     if not text:
         return
     with session(DB_PATH) as conn:
+        # 사용자 DM은 모두 대화 메모리에 기록 (draft 처리 여부와 무관)
+        conversation_service.append(conn, slack_user_id, "user", text)
+
         draft = draft_service.get_active_any_kind(conn, slack_user_id)
         if draft is not None:
             if draft.status == "awaiting_confirm":
@@ -288,6 +313,10 @@ def handle_dm_message(
                 _process_preference_turn(
                     client, conn, draft.id, user_message=text, member_name=member.name,
                 )
+            elif draft.kind == "topic":
+                _process_topic_draft(
+                    client, conn, draft.id, slack_user_id, channel, text, today,
+                )
             return
 
         # ─── active draft 없음 → 의도 라우팅 ───
@@ -308,9 +337,15 @@ def handle_dm_message(
             log.warning("intent prefetch search 실패 (계속 진행): %s", e)
             prefetch_hits = []
 
-        intent = llm_service.classify_intent(text, retrieved_hits=prefetch_hits)
-        log.info("DM router → intent=%s hits=%d for user=%s text=%r",
-                 intent.intent, len(prefetch_hits), slack_user_id, text[:80])
+        history = conversation_service.get_history(conn, slack_user_id, limit=15)
+        # 방금 추가한 user 메시지가 마지막에 있을 수 있으므로 제거 (classify가 user_message로 받음)
+        if history and history[-1].get("role") == "user" and history[-1].get("content") == text:
+            history = history[:-1]
+        intent = llm_service.classify_intent(
+            text, retrieved_hits=prefetch_hits, history=history,
+        )
+        log.info("DM router → intent=%s hits=%d hist=%d user=%s text=%r",
+                 intent.intent, len(prefetch_hits), len(history), slack_user_id, text[:80])
 
         if intent.intent == "defer":
             _begin_defer_in_dm(client, conn, slack_user_id, channel, text, today)
@@ -413,6 +448,62 @@ def _answer_schedule(
         client.chat_postMessage(channel=dm_channel, text=answer)
 
 
+def _process_topic_draft(
+    client: WebClient, conn, draft_id: int, slack_user_id: str,
+    dm_channel: str, text: str, today: date,
+) -> None:
+    """봇이 토픽을 물어본 컨텍스트(active topic draft)에서 사용자의 다음 메시지 처리.
+
+    - LLM으로 토픽 추출. 추출 성공 시 → 저장 + draft 닫음 + 확인 DM
+    - 추출 실패(빈 문자열) → draft 유지, 사용자에게 다시 요청
+    - 사용자가 토픽 외 다른 의도 (e.g. 연기) 처리 안 함 — 슬래시로 따로 처리하라 안내
+    """
+    assignment = defer_service.find_requester_assignment(conn, slack_user_id, today)
+    if assignment is None:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=":information_source: 다가올 발표 일정을 찾지 못했습니다. 토픽 draft 종료합니다.",
+        )
+        draft_service.cancel(conn, draft_id)
+        return
+    seminar_date, presenter = assignment
+
+    try:
+        topic = llm_service.extract_topic(text)
+    except Exception as e:
+        log.exception("topic 추출 실패")
+        client.chat_postMessage(channel=dm_channel, text=f":x: 토픽 추출 중 오류 ({e})")
+        return
+
+    if not topic:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=(
+                "토픽이 명확하지 않아요. 한 줄로 알려주세요. 예: _\"LLM agent ReAct vs Reflexion 비교\"_\n"
+                "다른 용건(연기/선호도 등)이면 채널에서 슬래시 커맨드를 써주세요."
+            ),
+        )
+        return  # draft 유지 — 다음 메시지도 토픽으로 처리
+
+    ok = schedule_service.set_topic(conn, seminar_date, presenter, topic)
+    if ok:
+        draft_service.mark_submitted(conn, draft_id)
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=(
+                f":white_check_mark: 토픽 저장됨 — *{seminar_date.isoformat()} ({presenter})*\n"
+                f"> _{topic}_\n"
+                "수정이 필요하시면 다시 메시지 주세요."
+            ),
+        )
+        log.info("topic via draft: %s / %s ← %r", presenter, seminar_date, topic[:80])
+    else:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=":x: 토픽 저장 실패. 운영자에게 문의해주세요.",
+        )
+
+
 def _save_seminar_note(
     client: WebClient, conn, slack_user_id: str, dm_channel: str, text: str, today: date
 ) -> None:
@@ -479,12 +570,13 @@ def _register_topic_from_dm(
     client: WebClient, conn, slack_user_id: str, dm_channel: str, text: str, today: date
 ) -> None:
     """DM 자연어로 토픽 등록. LLM이 깔끔한 토픽 본문만 추출."""
+    def say(msg: str) -> None:
+        client.chat_postMessage(channel=dm_channel, text=msg)
+        conversation_service.append(conn, slack_user_id, "assistant", msg)
+
     assignment = defer_service.find_requester_assignment(conn, slack_user_id, today)
     if assignment is None:
-        client.chat_postMessage(
-            channel=dm_channel,
-            text=":information_source: 다가올 발표 일정이 없어 토픽 등록 대상이 아닙니다.",
-        )
+        say(":information_source: 다가올 발표 일정이 없어 토픽 등록 대상이 아닙니다.")
         return
     seminar_date, presenter = assignment
 
@@ -492,29 +584,23 @@ def _register_topic_from_dm(
         topic = llm_service.extract_topic(text)
     except Exception as e:
         log.exception("topic 추출 실패")
-        client.chat_postMessage(channel=dm_channel, text=f":x: 토픽 추출 중 오류 ({e})")
+        say(f":x: 토픽 추출 중 오류 ({e})")
         return
 
     if not topic:
-        client.chat_postMessage(
-            channel=dm_channel,
-            text="토픽이 명확하지 않아요. 한 줄로 알려주세요. 예: _\"LLM agent ReAct vs Reflexion 비교\"_",
-        )
+        say("토픽이 명확하지 않아요. 한 줄로 알려주세요. 예: _\"LLM agent ReAct vs Reflexion 비교\"_")
         return
 
     ok = schedule_service.set_topic(conn, seminar_date, presenter, topic)
     if ok:
-        client.chat_postMessage(
-            channel=dm_channel,
-            text=(
-                f":white_check_mark: 토픽 저장됨 — *{seminar_date.isoformat()} ({presenter})*\n"
-                f"> _{topic}_\n"
-                "수정하려면 새 토픽 다시 보내주세요."
-            ),
+        say(
+            f":white_check_mark: 토픽 저장됨 — *{seminar_date.isoformat()} ({presenter})*\n"
+            f"> _{topic}_\n"
+            "수정하려면 새 토픽 다시 보내주세요."
         )
         log.info("topic saved via DM: %s / %s → %r", presenter, seminar_date, topic[:80])
     else:
-        client.chat_postMessage(channel=dm_channel, text=":x: 토픽 저장 실패. 운영자에게 문의해주세요.")
+        say(":x: 토픽 저장 실패. 운영자에게 문의해주세요.")
 
 
 def _answer_material(

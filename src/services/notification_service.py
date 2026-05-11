@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from slack_sdk import WebClient
 
 from ..config import BROADCAST_CHANNELS, CHANNEL_ID, DEFER_DEADLINE_DAYS
-from . import member_service, schedule_service
+from . import conversation_service, member_service, schedule_service
 
 log = logging.getLogger(__name__)
 
@@ -144,11 +144,11 @@ def send_topic_reminders(client: WebClient, conn: sqlite3.Connection, today: dat
         m = member_service.get_by_name(conn, slot_name)
         if m is None:
             continue
-        client.chat_postMessage(
-            channel=_open_dm(client, m.slack_user_id),
+        ch = _open_dm(client, m.slack_user_id)
+        _dm_with_memory(client, conn, slack_user_id=m.slack_user_id, channel=ch,
             text=(
                 f":memo: 다음 주 {target.month}/{target.day}(목) *{slot_label}* 발표 — 아직 토픽 미공유.\n"
-                "`/세미나-토픽` 또는 봇 DM에 \"내 토픽은 ~\" 으로 등록 부탁드립니다."
+                "이번에 다룰 내용 한 줄로 알려주시면 자동 저장됩니다."
             ),
         )
         log.info("topic_reminder DM → %s for %s", m.name, target)
@@ -198,6 +198,15 @@ def announce_new_cycle(client: WebClient, schedules: list, cycle_id: int) -> Non
     broadcast(client, text="\n".join(lines))
 
 
+def _dm_with_memory(client: WebClient, conn: sqlite3.Connection, *, slack_user_id: str, channel: str, text: str) -> None:
+    """사용자 DM 발송 + conversation_service 에 봇 발화로 기록."""
+    client.chat_postMessage(channel=channel, text=text)
+    try:
+        conversation_service.append(conn, slack_user_id, "assistant", text)
+    except Exception as e:
+        log.warning("conversation log (bot DM) 실패: %s", e)
+
+
 def ask_for_topics(client: WebClient, conn: sqlite3.Connection, schedules: list) -> None:
     """새 사이클 추첨 직후, 토픽 없는 각 발표자에게 DM으로 토픽 요청."""
     from ..slack.messages import fmt_date
@@ -214,8 +223,7 @@ def ask_for_topics(client: WebClient, conn: sqlite3.Connection, schedules: list)
                 continue
             try:
                 ch = _open_dm(client, m.slack_user_id)
-                client.chat_postMessage(
-                    channel=ch,
+                _dm_with_memory(client, conn, slack_user_id=m.slack_user_id, channel=ch,
                     text=(
                         f":wave: 안녕하세요 *{m.name}*님! *{fmt_date(s.date)} {slot_label}* 발표가 배정됐어요 :tada:\n\n"
                         "이번에 다룰 토픽 한 줄로 알려주시면 자동 저장됩니다.\n"

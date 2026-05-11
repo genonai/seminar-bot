@@ -268,19 +268,24 @@ def classify_intent(
     user_message: str,
     *,
     retrieved_hits: list[dict[str, Any]] | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> IntentResult:
     """tool_choice 강제로 route_intent 한 번 호출시키고 결과 추출.
 
-    retrieved_hits: 사용자 메시지를 미리 벡터 검색한 top-k. router가 "사용자 질문이
-        실제 자료와 관련 있는지" 거리 + 스니펫 보고 판단 → material_question 정확도 ↑.
-        prompt 크기는 hit 개수에 비례 (자료 총개수와 무관) → 스케일 OK.
+    retrieved_hits: 사용자 메시지를 미리 벡터 검색한 top-k → material_question 정확도.
+    history: 이 사용자와의 직전 DM 대화 (user/assistant 교차). 봇이 직전에 토픽/노트를
+        물어봤다면 사용자의 짧은 답("pydanticAI")이 그 답으로 정확히 분류됨.
     """
+    msgs: list[dict[str, Any]] = [
+        {"role": "system", "content": intent_router_system_prompt(retrieved_hits)},
+    ]
+    if history:
+        msgs.extend(history)
+    msgs.append({"role": "user", "content": user_message})
+
     resp = _client().chat.completions.create(
         model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": intent_router_system_prompt(retrieved_hits)},
-            {"role": "user", "content": user_message},
-        ],
+        messages=msgs,
         tools=[ROUTE_INTENT_TOOL],
         tool_choice={"type": "function", "function": {"name": "route_intent"}},
         temperature=0.1,
@@ -585,6 +590,14 @@ def intent_router_system_prompt(retrieved_hits: list[dict[str, Any]] | None = No
     return f"""당신은 Genon AI 주간 세미나 운영 봇이다.
 사용자가 슬랙 DM으로 보낸 메시지의 의도를 분류한다.
 route_intent tool을 반드시 한 번 호출한다.
+
+# 대화 컨텍스트 활용 (가장 중요)
+시스템 프롬프트 다음 / user 메시지 이전에 *이 사용자와의 직전 대화 내역* 이 첨부될 수 있다.
+당신(assistant)이 직전에 물어본 내용이 있으면 사용자의 답을 그 답으로 해석:
+  - 직전 "토픽을 알려주세요" → 사용자 짧은 응답 ("pydanticAI", "RAG 비교") → topic_registration
+  - 직전 "안내사항 있나요?" → 사용자 "회의실 B" → seminar_note (운영자일 때만 의미)
+  - 직전 "연기 사유?" → 사용자 답 → defer (단 draft 흐름이 따로 처리하므로 보통 여기 안 옴)
+직전 봇 메시지가 없거나 토픽 등을 묻지 않았으면 평소대로 분류.
 
 분류 가이드
 - defer: 본인 발표를 연기하고 싶다는 의사가 보임. "못해", "휴가", "미뤄줘", "변경", 날짜 + 부정문 등.

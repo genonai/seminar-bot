@@ -11,6 +11,7 @@ from ..config import DB_PATH
 from ..db import session
 from ..services import (
     admin_service,
+    conversation_service,
     cycle_service,
     defer_service,
     member_service,
@@ -360,14 +361,13 @@ def register(app: App) -> None:
                     continue
                 try:
                     dm = client.conversations_open(users=m.slack_user_id)["channel"]["id"]
-                    client.chat_postMessage(
-                        channel=dm,
-                        text=(
-                            f":memo: {next_s.date.month}/{next_s.date.day}(목) *{slot_label}* 발표 토픽이 아직 등록 안 됐어요.\n"
-                            "이번에 다룰 내용을 한 줄로 봇 DM에 보내주시면 자동 저장됩니다.\n"
-                            "예: _\"LLM agent ReAct vs Reflexion 비교\"_"
-                        ),
+                    msg = (
+                        f":memo: {next_s.date.month}/{next_s.date.day}(목) *{slot_label}* 발표 토픽이 아직 등록 안 됐어요.\n"
+                        "이번에 다룰 내용을 한 줄로 봇 DM에 보내주시면 자동 저장됩니다.\n"
+                        "예: _\"LLM agent ReAct vs Reflexion 비교\"_"
                     )
+                    client.chat_postMessage(channel=dm, text=msg)
+                    conversation_service.append(conn, m.slack_user_id, "assistant", msg)
                     sent.append(f"{slot_label} {slot_name}")
                     log.info("topic remind DM → %s for %s", m.name, next_s.date)
                 except Exception as e:

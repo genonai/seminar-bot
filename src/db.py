@@ -72,6 +72,13 @@ SCHEMA: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS user_conversations (
+      slack_user_id  TEXT PRIMARY KEY,
+      messages       TEXT NOT NULL DEFAULT '[]',
+      updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS admins (
       slack_user_id   TEXT PRIMARY KEY,
       added_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
