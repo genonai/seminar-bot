@@ -284,7 +284,8 @@ def handle_dm_message(
 
         # ─── active draft 없음 → 의도 라우팅 ───
         member = member_service.get_by_slack_id(conn, slack_user_id)
-        if member is None:
+        is_admin_user = admin_service.is_admin(slack_user_id)
+        if member is None and not is_admin_user:
             client.chat_postMessage(
                 channel=channel,
                 text="발표 멤버가 아니어서 응답이 어렵습니다. 운영자에게 문의해주세요.",
@@ -343,6 +344,10 @@ def _begin_preference_in_dm(
 ) -> None:
     member = member_service.get_by_slack_id(conn, slack_user_id)
     if member is None:
+        client.chat_postMessage(
+            channel=dm_channel,
+            text=":information_source: 운영자는 발표 풀에 없어서 선호도 등록 대상이 아닙니다.",
+        )
         return
     existing = draft_service.get_active(conn, slack_user_id, "preference")
     if existing is not None:
