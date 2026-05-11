@@ -2,9 +2,8 @@
 
 지우는 것:
   1) submissions 테이블의 모든 row
-  2) data/submissions/ 디렉토리의 모든 PDF 파일
-  3) Weaviate 'SeminarPage' 컬렉션 전체 (삭제)
-  4) notification_log 중 'announce_submission' 등 자료 관련 로그 (있다면)
+  2) submission_pages 테이블의 모든 row (벡터 청크)
+  3) data/submissions/ 디렉토리의 모든 PDF 파일
 
 옵션:
   --confirm    실행. (이 플래그 없으면 dry-run, 영향 없이 카운트만 출력)
@@ -51,13 +50,9 @@ def _wipe_one(sid: int, confirm: bool) -> None:
         conn.execute("DELETE FROM submissions WHERE id = ?", (sid,))
         conn.commit()
 
-    # Weaviate
-    try:
-        deleted = vector_service.delete_submission(sid)
-        print(f"  Weaviate 객체 {deleted}개 삭제")
-    except Exception as e:
-        print(f"  Weaviate 삭제 실패 (무시): {e}")
-
+    # submission_pages (벡터 청크)
+    deleted = vector_service.delete_submission(sid)
+    print(f"  submission_pages {deleted}개 삭제")
     print(f"[wipe] submission {sid} 정리 완료")
 
 
@@ -77,38 +72,15 @@ def _wipe_all(confirm: bool) -> None:
 
     # 1) DB
     with session(DB_PATH) as conn:
-        conn.execute("DELETE FROM submissions")
-        conn.commit()
-    print("[wipe] submissions 테이블 비움")
+        with conn:
+            conn.execute("DELETE FROM submission_pages")
+            conn.execute("DELETE FROM submissions")
+    print("[wipe] submissions + submission_pages 테이블 비움")
 
     # 2) 파일
     if subs_root.exists():
         shutil.rmtree(subs_root)
         print(f"[wipe] {subs_root} 삭제")
-
-    # 3) Weaviate 컬렉션 전체 삭제 (다음 ingest 때 자동 재생성)
-    import weaviate
-    from urllib.parse import urlparse
-    from src.config import WEAVIATE_URL
-    parsed = urlparse(WEAVIATE_URL)
-    host = parsed.hostname or "localhost"
-    port = parsed.port or 8080
-    try:
-        client = weaviate.connect_to_custom(
-            http_host=host, http_port=port, http_secure=parsed.scheme == "https",
-            grpc_host=host, grpc_port=50051, grpc_secure=parsed.scheme == "https",
-            skip_init_checks=True,
-        )
-        try:
-            if client.collections.exists(vector_service.COLLECTION_NAME):
-                client.collections.delete(vector_service.COLLECTION_NAME)
-                print(f"[wipe] Weaviate '{vector_service.COLLECTION_NAME}' 컬렉션 삭제")
-            else:
-                print(f"[wipe] Weaviate 컬렉션 없음, skip")
-        finally:
-            client.close()
-    except Exception as e:
-        print(f"[wipe] Weaviate 정리 실패 (무시): {e}")
 
     print("[wipe] 전체 초기화 완료")
 

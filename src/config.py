@@ -27,10 +27,7 @@ VLM_API_KEY: str | None = os.getenv("VLM_API_KEY") or LLM_API_KEY
 VLM_API_BASE_URL: str = os.getenv("VLM_API_BASE_URL") or LLM_API_BASE_URL
 VLM_MODEL: str = os.getenv("VLM_MODEL", "anthropic/claude-sonnet-4.5")
 
-# Weaviate (vector DB) — 181 서버에 이미 떠있는 인스턴스 사용 (BYOV: vectorizer 없음)
-WEAVIATE_URL: str = os.getenv("WEAVIATE_URL", "http://localhost:8080")
-
-# Embedding — Weaviate vectorizer 없어서 직접 임베딩 생성. 사내 GenOS (OpenAI 호환).
+# Embedding — 사내 GenOS (OpenAI 호환).
 #   EMBEDDING_API_BASE_URL = https://<host>/api/gateway/rep/serving/{serving_id}/v1
 #   EMBEDDING_MODEL = serving_rev_id (예: '559')  미설정 시 GET /v1/models 로 자동 발견
 EMBEDDING_API_KEY: str | None = os.getenv("EMBEDDING_API_KEY")

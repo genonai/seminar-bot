@@ -80,6 +80,26 @@ SCHEMA: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS submission_pages (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      submission_id       INTEGER NOT NULL,
+      presenter           TEXT NOT NULL,
+      seminar_date        TEXT NOT NULL,
+      title               TEXT,
+      page_number         INTEGER NOT NULL,
+      content             TEXT NOT NULL,
+      text_content        TEXT,
+      visual_description  TEXT,
+      page_summary        TEXT,
+      key_points          TEXT,
+      entities            TEXT,
+      tags                TEXT,
+      vector              BLOB NOT NULL,
+      created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (submission_id) REFERENCES submissions(id) ON DELETE CASCADE
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS submissions (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       presenter       TEXT NOT NULL,                  -- 멤버 이름
@@ -105,6 +125,8 @@ SCHEMA: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_defer_status ON defer_requests(status)",
     "CREATE INDEX IF NOT EXISTS idx_submissions_seminar ON submissions(seminar_date)",
     "CREATE INDEX IF NOT EXISTS idx_submissions_presenter ON submissions(presenter)",
+    "CREATE INDEX IF NOT EXISTS idx_submission_pages_submission ON submission_pages(submission_id)",
+    "CREATE INDEX IF NOT EXISTS idx_submission_pages_seminar ON submission_pages(seminar_date)",
 )
 
 
