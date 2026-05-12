@@ -1,0 +1,31 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Genon AI//Seminar Bot//KO
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VTIMEZONE
+TZID:Asia/Seoul
+BEGIN:STANDARD
+DTSTART:19700101T000000
+TZOFFSETFROM:+0900
+TZOFFSETTO:+0900
+TZNAME:KST
+END:STANDARD
+END:VTIMEZONE
+BEGIN:VEVENT
+UID:weekly-seminar-genon-ai@genon.ai
+DTSTAMP:20260512T090000Z
+DTSTART;TZID=Asia/Seoul:20260514T140000
+DTEND;TZID=Asia/Seoul:20260514T150000
+RRULE:FREQ=WEEKLY;BYDAY=TH
+SUMMARY:AI Engineer 주간 세미나
+LOCATION:13F Focus Room A
+DESCRIPTION:매주 목요일 14:00 – 15:00\n\n장소: 13F Focus Room A (오프라인 좌석 5석 한정)\n오프라인 자리는 매주 채널 #ai-engineer-주간세미나 공지 메시지에 ✋ 이모지를 누른 선착순 5분께 드립니다.\n나머지 분들은 화요일에 공유되는 Google Meet 링크로 참석 부탁드립니다.\n\n주간 발표자 / 토픽 확인: Slack 슬래시 커맨드 /세미나-일정\n발표 자료 관련 질문: 봇 DM 으로 자유롭게\n\n— Genon AI Seminar Bot
+ORGANIZER;CN=Genon AI Seminar Bot:mailto:noreply@genon.ai
+BEGIN:VALARM
+TRIGGER:-PT15M
+ACTION:DISPLAY
+DESCRIPTION:주간 세미나 15분 전
+END:VALARM
+END:VEVENT
+END:VCALENDAR
