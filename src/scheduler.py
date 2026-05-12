@@ -92,7 +92,8 @@ def start_scheduler(client: WebClient) -> BackgroundScheduler:
 
     scheduler.add_job(
         _job_wednesday_reminder, args=(client,),
-        trigger=CronTrigger(day_of_week="wed", hour=14, minute=0, timezone=TIMEZONE),
+        # 퇴근 전 (17:00) — 자료 미제출 발표자에게 /제출 안내
+        trigger=CronTrigger(day_of_week="wed", hour=17, minute=0, timezone=TIMEZONE),
         id="wednesday_reminder", replace_existing=True,
     )
     scheduler.add_job(

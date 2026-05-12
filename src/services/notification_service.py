@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from slack_sdk import WebClient
 
 from ..config import BROADCAST_CHANNELS, CHANNEL_ID, DEFER_DEADLINE_DAYS
-from . import conversation_service, member_service, schedule_service
+from . import conversation_service, member_service, schedule_service, submission_service
 
 log = logging.getLogger(__name__)
 
@@ -49,22 +49,29 @@ def broadcast(client: WebClient, *, text: str, blocks: list[dict] | None = None)
 # (수) 자료 마감 리마인더
 # ─────────────────────────────────────────────────────────────
 def send_wednesday_reminder(client: WebClient, conn: sqlite3.Connection, target_thu: date) -> None:
-    """수요일 14:00 발송. 다음날(target_thu) 발표자에게 자료 마감 안내 DM."""
+    """수요일 발송 (퇴근 전, cron 17:00). 내일(target_thu) 발표자 중
+    아직 자료 제출 안 한 사람에게 DM. /제출 슬래시 명시."""
     if not _try_record(conn, "wednesday_reminder", target_thu):
         log.info("wednesday_reminder %s 이미 발송됨, skip", target_thu)
         return
     s = schedule_service.get_by_date(conn, target_thu)
     if s is None or s.status != "예정":
         return
+
+    submitted = {sub.presenter for sub in submission_service.get_for_seminar(conn, target_thu)}
     for name in s.presenters():
+        if name in submitted:
+            log.info("wednesday_reminder: %s 이미 제출, skip", name)
+            continue
         m = member_service.get_by_name(conn, name)
         if m is None:
             continue
-        client.chat_postMessage(
-            channel=_open_dm(client, m.slack_user_id),
+        ch = _open_dm(client, m.slack_user_id)
+        _dm_with_memory(client, conn, slack_user_id=m.slack_user_id, channel=ch,
             text=(
-                f":memo: 내일({target_thu.isoformat()}, 목) 발표 자료 마감입니다.\n"
-                f"오늘(수) 14:00 까지 자료 공유 부탁드립니다 — 화이팅!"
+                f":memo: 내일 *{target_thu.month}/{target_thu.day}(목) 14:00* 발표 자료 마감입니다.\n"
+                f"퇴근 전에 채널에서 `/제출` 슬래시로 PDF 한 개 올려주세요 :muscle:\n"
+                "_봇이 자동으로 VLM 분석 + 채널에 공유 + RAG 인입까지 처리합니다._"
             ),
         )
         log.info("wednesday_reminder DM → %s for %s", m.name, target_thu)
