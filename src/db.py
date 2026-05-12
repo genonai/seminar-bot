@@ -79,6 +79,18 @@ SCHEMA: tuple[str, ...] = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS memo_pad (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      seminar_date    TEXT,                          -- YYYY-MM-DD or NULL (전역 메모)
+      category        TEXT NOT NULL,                 -- 자유 카테고리 (offline_attendee, todo, note 등)
+      content         TEXT NOT NULL,
+      metadata        TEXT,                          -- JSON, 확장용
+      created_by      TEXT,                          -- slack_user_id 트리거한 사용자
+      created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_memo_pad_seminar_cat ON memo_pad(seminar_date, category)",
+    """
     CREATE TABLE IF NOT EXISTS admins (
       slack_user_id   TEXT PRIMARY KEY,
       added_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

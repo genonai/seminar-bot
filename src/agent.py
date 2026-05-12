@@ -24,9 +24,11 @@ from .services import (
     conversation_service,
     defer_service,
     member_service,
+    memo_service,
     schedule_service,
     vector_service,
 )
+from .config import ADMIN_JJR
 from . import llm_service
 
 log = logging.getLogger(__name__)
@@ -141,6 +143,86 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "add_memo",
+            "description": (
+                "임의의 메모를 영구 저장. 특정 세미나 회차에 묶거나 전역으로.\n"
+                "사용 예:\n"
+                "  - 사용자 '나 참가하고 싶어' → add_memo(seminar_date=다음회차, category='offline_attendee', content='<@user_id>')\n"
+                "  - '자료 인쇄 부탁' → add_memo(seminar_date='YYYY-MM-DD', category='todo', content='자료 인쇄')\n"
+                "  - 일반 메모 → category='note', content=...\n"
+                "본인 신청 의사를 등록할 땐 content 에 '<@호출자_user_id>' 형태로 멘션 넣어라."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seminar_date": {
+                        "type": ["string", "null"],
+                        "description": "YYYY-MM-DD 회차 묶음. 전역 메모면 null.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "자유 카테고리 (예: 'offline_attendee', 'todo', 'note')",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "메모 본문 (한국어, 간결)",
+                    },
+                },
+                "required": ["seminar_date", "category", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_memos",
+            "description": (
+                "저장된 메모 조회. seminar_date/category 로 필터 가능. 결과는 사용자에게 자연어로 정리해 응답."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "seminar_date": {
+                        "type": ["string", "null"],
+                        "description": "특정 회차 (YYYY-MM-DD) 또는 null (전체)",
+                    },
+                    "category": {
+                        "type": ["string", "null"],
+                        "description": "특정 카테고리 또는 null (모든 카테고리)",
+                    },
+                },
+                "required": ["seminar_date", "category"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "escalate_to_admin",
+            "description": (
+                "사용자 요청이 봇 권한/지식 밖이거나 운영자 판단이 필요할 때. "
+                "운영자에게 DM 으로 사용자 메시지 + 봇의 판단 이유를 전달. "
+                "사용자에게도 'escalate 했습니다' 안내 응답."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "왜 escalate 하는지 한 줄 (한국어)",
+                    },
+                    "user_message_summary": {
+                        "type": "string",
+                        "description": "사용자 요청 핵심 한국어 요약",
+                    },
+                },
+                "required": ["reason", "user_message_summary"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_message",
             "description": "위 도구 어디에도 해당 안 되는 경우 사용자에게 일반 텍스트 응답 (인사, 모호한 질문 안내, 거절, 잡담 등).",
             "parameters": {
@@ -188,6 +270,13 @@ send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에
 - 발표 자료 내용 질문 (검색 결과와 관련) → answer_material_question
 - 본인 발표 연기 의사 → start_defer_flow
 - 본인 평상시 선호도 → start_preference_flow
+- *기록할 메모/명단* (참가 신청, 운영 todo, 임의 메모 등) → add_memo
+   - 예: '나 이번 세션 참가하고 싶어' → category='offline_attendee', seminar_date=가장 가까운 회차, content='<@호출자>'
+   - 본인 신청은 호출자 user_id 를 '<@U...>' 멘션 형태로 content 에 넣어라 (사용자 이름 정보가 있다면 'name (<@U...>)' 도 OK)
+- *메모 조회* ('이번 세션 누가 참가?', '오프라인 신청자 명단', '운영 todo' 등) → list_memos
+   - 결과를 사용자에게 자연어로 정리해 응답
+- *권한/지식 밖* — 봇이 답할 수 없거나 운영자 판단 필요 → escalate_to_admin
+   - 예: '회의실 예약 좀', '발표비 정산', '봇 기능에 없는 외부 시스템 연동 요청' 등
 - 인사/잡담/그 외 → send_message
 
 # 대화 history 활용 (중요)
@@ -360,6 +449,18 @@ def _dispatch(
                                        args.get("initial_text") or "")
         return
 
+    if tool_name == "add_memo":
+        _tool_add_memo(client, conn, slack_user_id, dm_channel, args)
+        return
+
+    if tool_name == "list_memos":
+        _tool_list_memos(client, conn, slack_user_id, dm_channel, args)
+        return
+
+    if tool_name == "escalate_to_admin":
+        _tool_escalate(client, conn, slack_user_id, dm_channel, args)
+        return
+
     log.warning("unknown tool: %s", tool_name)
     _say(client, conn, slack_user_id, dm_channel, ":x: 알 수 없는 도구 호출. 운영자 확인 필요.")
 
@@ -463,6 +564,94 @@ def _tool_set_note(
     else:
         _say(client, conn, slack_user_id, dm_channel,
              f":x: {target_date.isoformat()} 일정 찾지 못함.")
+
+
+def _tool_add_memo(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+) -> None:
+    seminar_date = args.get("seminar_date")
+    category = (args.get("category") or "").strip()
+    content = (args.get("content") or "").strip()
+    if not category or not content:
+        _say(client, conn, slack_user_id, dm_channel, ":x: 메모 카테고리/본문이 비어있어요.")
+        return
+    try:
+        memo_id = memo_service.add(
+            conn,
+            seminar_date=seminar_date if seminar_date else None,
+            category=category, content=content, created_by=slack_user_id,
+        )
+    except Exception as e:
+        log.exception("memo add 실패")
+        _say(client, conn, slack_user_id, dm_channel, f":x: 메모 저장 실패: {e}")
+        return
+
+    where = f" ({seminar_date})" if seminar_date else ""
+    _say(client, conn, slack_user_id, dm_channel,
+         f":memo: 메모 저장됨 — *{category}*{where}\n> {content}")
+    log.info("memo added: id=%d cat=%s sem=%s content=%r",
+             memo_id, category, seminar_date, content[:80])
+
+
+def _tool_list_memos(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+) -> None:
+    seminar_date = args.get("seminar_date")
+    category = args.get("category")
+    rows = memo_service.list_memos(
+        conn,
+        seminar_date=seminar_date if seminar_date else None,
+        category=category if category else None,
+        limit=50,
+    )
+    if not rows:
+        scope_label = []
+        if seminar_date: scope_label.append(seminar_date)
+        if category: scope_label.append(f"#{category}")
+        scope = f" ({', '.join(scope_label)})" if scope_label else ""
+        _say(client, conn, slack_user_id, dm_channel, f":notebook: 메모 없음{scope}.")
+        return
+
+    # 카테고리별 그룹핑
+    by_cat: dict[str, list[dict]] = {}
+    for r in rows:
+        by_cat.setdefault(r["category"], []).append(r)
+
+    lines: list[str] = [":notebook: *메모*"]
+    for cat, items in by_cat.items():
+        scope = f" — {seminar_date}" if seminar_date else ""
+        lines.append(f"\n*{cat}*{scope} ({len(items)}개)")
+        for r in items[:20]:
+            sem = f" [{r['seminar_date']}]" if (r.get("seminar_date") and not seminar_date) else ""
+            lines.append(f"  • {r['content']}{sem}")
+
+    _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+
+
+def _tool_escalate(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+) -> None:
+    reason = (args.get("reason") or "").strip() or "(이유 미지정)"
+    summary = (args.get("user_message_summary") or "").strip() or "(요약 없음)"
+    primary = admin_service.get_primary_admin_id() or ADMIN_JJR
+    text_admin = (
+        f":bell: *봇 권한 밖 요청 escalation*\n"
+        f"From: <@{slack_user_id}>\n"
+        f"요청 요약: {summary}\n"
+        f"봇 판단: {reason}"
+    )
+    try:
+        admin_dm = client.conversations_open(users=primary)["channel"]["id"]
+        client.chat_postMessage(channel=admin_dm, text=text_admin)
+    except Exception as e:
+        log.warning("escalate → admin DM 실패: %s", e)
+        _say(client, conn, slack_user_id, dm_channel,
+             ":x: 운영자에게 전달 실패. 잠시 후 다시 시도하거나 직접 연락 부탁드립니다.")
+        return
+
+    _say(client, conn, slack_user_id, dm_channel,
+         f"제 권한/판단 밖이라 운영자(<@{primary}>) 에게 메시지 전달드렸어요. 곧 응답 드릴 거예요. :pray:")
+    log.info("escalate by %s reason=%r summary=%r", slack_user_id, reason[:80], summary[:80])
 
 
 # ─────────────────────────────────────────────────────────────
