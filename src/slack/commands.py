@@ -304,7 +304,7 @@ def register(app: App) -> None:
 
     @app.command("/세미나-공지")
     def handle_announce(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
-        """운영자 한정. 모든 BROADCAST_CHANNELS 에 임의 메시지 발송."""
+        """운영자 한정. 선택한 BROADCAST_CHANNELS 에 임의 메시지 발송."""
         ack()
         user_id = body["user_id"]
         log.info("/세미나-공지 user=%s channel=%s", user_id, body.get("channel_id"))
@@ -315,11 +315,28 @@ def register(app: App) -> None:
             guards.reject_wrong_channel(respond)
             return
 
+        # 각 channel ID에 대해 실제 채널 이름 조회 → label
+        from ..config import BROADCAST_CHANNELS
+        channel_options = []
+        for ch_id in BROADCAST_CHANNELS:
+            label = ch_id
+            try:
+                info = client.conversations_info(channel=ch_id)
+                name = info.get("channel", {}).get("name")
+                if name:
+                    label = f"#{name}"
+            except Exception:
+                pass
+            channel_options.append({
+                "text": {"type": "plain_text", "text": label[:75]},
+                "value": ch_id,
+            })
+
         initial = (body.get("text") or "").strip()
         try:
             client.views_open(
                 trigger_id=body["trigger_id"],
-                view=views.announce_modal(initial),
+                view=views.announce_modal(channel_options, initial),
             )
         except Exception as e:
             log.exception("/세미나-공지 modal 열기 실패")

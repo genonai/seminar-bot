@@ -25,35 +25,49 @@ def register(app: App) -> None:
     @app.view("broadcast_announce")
     def on_broadcast_announce(ack: Ack, body: dict, view: dict, client: WebClient) -> None:
         slack_user_id = body["user"]["id"]
-        # 보안: 운영자만 발송 가능
         if not admin_service.is_admin(slack_user_id):
             ack({"response_action": "errors", "errors": {"msg_block": "운영자만 발송 가능합니다."}})
             return
 
-        text = (
-            view.get("state", {}).get("values", {})
-                .get("msg_block", {}).get("msg_input", {}).get("value")
-            or ""
-        ).strip()
+        state = view.get("state", {}).get("values", {})
+        text = (state.get("msg_block", {}).get("msg_input", {}).get("value") or "").strip()
         if not text:
             ack({"response_action": "errors", "errors": {"msg_block": "메시지를 입력해주세요."}})
             return
+
+        selected = (
+            state.get("channels_block", {})
+                 .get("channels_select", {})
+                 .get("selected_options")
+            or []
+        )
+        channel_ids = [opt["value"] for opt in selected if opt.get("value")]
+        if not channel_ids:
+            ack({"response_action": "errors", "errors": {"channels_block": "최소 한 채널은 선택해주세요."}})
+            return
         ack()
 
-        notification_service.broadcast(client, text=text)
-        # 발송한 운영자에게 DM 확인
+        sent: list[str] = []
+        for ch in channel_ids:
+            try:
+                client.chat_postMessage(channel=ch, text=text)
+                sent.append(ch)
+            except Exception as e:
+                log.warning("broadcast → %s 실패: %s", ch, e)
+
         try:
             dm = client.conversations_open(users=slack_user_id)["channel"]["id"]
             client.chat_postMessage(
                 channel=dm,
                 text=(
-                    f":mega: 공지 발송 완료 — {len(BROADCAST_CHANNELS)}개 채널에 게시.\n"
-                    f"> {text[:300]}{'...' if len(text) > 300 else ''}"
+                    f":mega: 공지 발송 완료 — {len(sent)}개 채널에 게시\n"
+                    + "\n".join(f"  • <#{ch}>" for ch in sent)
+                    + f"\n> {text[:300]}{'...' if len(text) > 300 else ''}"
                 ),
             )
         except Exception as e:
             log.warning("발송 확인 DM 실패: %s", e)
-        log.info("/세미나-공지 by %s → %d 채널 (text len=%d)", slack_user_id, len(BROADCAST_CHANNELS), len(text))
+        log.info("/세미나-공지 by %s → %d 채널 (selected=%s)", slack_user_id, len(sent), channel_ids)
 
     @app.view("submit_seminar_note")
     def on_submit_seminar_note(ack: Ack, body: dict, view: dict, client: WebClient) -> None:

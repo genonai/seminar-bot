@@ -55,8 +55,11 @@ def seminar_note_modal(upcoming: list, default_idx: int = 0) -> dict:
     }
 
 
-def announce_modal(initial_text: str = "") -> dict:
-    """`/세미나-공지` 운영자 한정 — 모든 BROADCAST_CHANNELS 에 발송할 메시지 미리보기."""
+def announce_modal(channel_options: list[dict], initial_text: str = "") -> dict:
+    """`/세미나-공지` 운영자 한정.
+
+    channel_options: [{"text": {...}, "value": channel_id}, ...]  ← 채널별 선택지
+    """
     return {
         "type": "modal",
         "callback_id": "broadcast_announce",
@@ -65,8 +68,16 @@ def announce_modal(initial_text: str = "") -> dict:
         "close": {"type": "plain_text", "text": "취소"},
         "blocks": [
             {
-                "type": "context",
-                "elements": [{"type": "mrkdwn", "text": "이 메시지는 *모든 공지 채널* 에 봇 명의로 게시됩니다."}],
+                "type": "input",
+                "block_id": "channels_block",
+                "label": {"type": "plain_text", "text": "발송 채널"},
+                "element": {
+                    "type": "checkboxes",
+                    "action_id": "channels_select",
+                    "options": channel_options,
+                    # 기본 전체 선택 — 운영자가 골라서 해제하면 그 채널엔 안 감
+                    "initial_options": channel_options,
+                },
             },
             {
                 "type": "input",
