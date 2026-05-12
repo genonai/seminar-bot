@@ -171,8 +171,12 @@ def _system_prompt(
 
 # 호출자 정보
 이름: {caller_name}
-역할: {caller_role}    (admin=운영자, member=발표 풀 멤버, unknown=둘 다 아님)
+역할: {caller_role}    (admin=운영자, member=발표 풀 멤버, bystander=외부 청중)
 오늘: {today_iso}
+
+bystander 는 *읽기(answer_schedule_question / answer_material_question / send_message)*만 가능.
+mutation 요청 (set_topic / set_seminar_note / start_defer_flow / start_preference_flow) 시도하면
+send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에요").
 
 # 도구 선택 가이드
 - 본인 발표 토픽 알려옴 → set_topic(target_presenter=null, topic=…)
@@ -219,13 +223,16 @@ def run(
 ) -> None:
     caller_member = member_service.get_by_slack_id(conn, slack_user_id)
     is_admin = admin_service.is_admin(slack_user_id)
-    if caller_member is None and not is_admin:
-        _say(client, conn, slack_user_id, dm_channel,
-             "발표 멤버가 아니어서 응답이 어렵습니다. 운영자에게 문의해주세요.")
-        return
 
     caller_name = caller_member.name if caller_member else f"<@{slack_user_id}>"
-    caller_role = "admin" if is_admin else ("member" if caller_member else "unknown")
+    # bystander = 발표 멤버도 운영자도 아닌 외부 청중 (다른 채널에서 봇 만난 사람)
+    # 읽기(일정/자료 조회) 허용, 쓰기(토픽/노트/연기 등) 차단
+    if is_admin:
+        caller_role = "admin"
+    elif caller_member:
+        caller_role = "member"
+    else:
+        caller_role = "bystander"
 
     # 사용자 메시지로 사전 검색 → 자료 컨텍스트
     try:
@@ -298,6 +305,9 @@ def run(
 # ─────────────────────────────────────────────────────────────
 # Dispatcher
 # ─────────────────────────────────────────────────────────────
+MUTATION_TOOLS = {"set_topic", "set_seminar_note", "start_defer_flow", "start_preference_flow"}
+
+
 def _dispatch(
     client: WebClient, conn,
     *,
@@ -306,6 +316,12 @@ def _dispatch(
     caller_member, is_admin: bool,
     hits: list[dict[str, Any]], today: date,
 ) -> None:
+    # bystander 가드: 읽기만 허용
+    if (caller_member is None and not is_admin and tool_name in MUTATION_TOOLS):
+        _say(client, conn, slack_user_id, dm_channel,
+             ":no_entry_sign: 발표 멤버만 사용 가능한 기능이에요. 일정/자료 조회는 가능합니다.")
+        return
+
     if tool_name == "send_message":
         _say(client, conn, slack_user_id, dm_channel, args.get("text", "").strip() or ":wave:")
         return

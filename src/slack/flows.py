@@ -367,7 +367,7 @@ def _begin_preference_in_dm(
     if member is None:
         client.chat_postMessage(
             channel=dm_channel,
-            text=":information_source: 운영자는 발표 풀에 없어서 선호도 등록 대상이 아닙니다.",
+            text=":information_source: 발표 풀 멤버만 선호도를 등록할 수 있습니다.",
         )
         return
     existing = draft_service.get_active(conn, slack_user_id, "preference")
