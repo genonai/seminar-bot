@@ -357,14 +357,23 @@ def run(
 
     oai = OpenAI(api_key=LLM_API_KEY, base_url=LLM_API_BASE_URL)
     try:
+        # tool_choice="required": LLM 이 무조건 tool 하나 호출하게 강제.
+        # history 오염으로 LLM 이 rejection 텍스트만 뱉는 패턴 차단.
         resp = oai.chat.completions.create(
-            model=LLM_MODEL, messages=msgs, tools=TOOLS, tool_choice="auto",
+            model=LLM_MODEL, messages=msgs, tools=TOOLS, tool_choice="required",
             temperature=0.2,
         )
     except Exception as e:
-        log.exception("agent LLM 호출 실패")
-        _say(client, conn, slack_user_id, dm_channel, f":x: 처리 중 오류 ({e})")
-        return
+        log.warning("tool_choice=required 실패, auto 로 fallback: %s", e)
+        try:
+            resp = oai.chat.completions.create(
+                model=LLM_MODEL, messages=msgs, tools=TOOLS, tool_choice="auto",
+                temperature=0.2,
+            )
+        except Exception as e2:
+            log.exception("agent LLM 호출 실패")
+            _say(client, conn, slack_user_id, dm_channel, f":x: 처리 중 오류 ({e2})")
+            return
 
     msg = resp.choices[0].message
     log.info("agent → user=%s tool_calls=%s text=%r",
