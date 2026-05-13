@@ -152,7 +152,8 @@ def announce_channel_submission(
     slack_file_id: str,
     submission_id: int,
 ) -> None:
-    """ingest 완료 직후 채널에 자료 공지."""
+    """ingest 완료 직후 채널에 자료 공지 — PDF 파일 첨부 + 메타 코멘트."""
+    from pathlib import Path
     tag_text = " ".join(f"`{t}`" for t in tags[:6]) if tags else ""
     text_lines = [
         f":books: *{presenter}*님 발표 자료 제출 — *{seminar_date.isoformat()} (목)*",
@@ -166,20 +167,61 @@ def announce_channel_submission(
         text_lines.append(tag_text)
     text_lines.append("")
     text_lines.append(":speech_balloon: 봇 DM에 자료 관련 질문하시면 답변합니다.")
-
     text = "\n".join(text_lines)
+
+    # PDF 파일 경로 + 이름 확보
+    with session(DB_PATH) as conn:
+        sub = submission_service.get(conn, submission_id)
+    file_path = Path(sub.file_path) if sub else None
+
     primary_ts: str | None = None
     for ch in BROADCAST_CHANNELS:
         try:
-            resp = client.chat_postMessage(channel=ch, text=text)
-            if primary_ts is None:
-                primary_ts = resp["ts"]
+            if file_path and file_path.exists():
+                # PDF 첨부 + initial_comment 로 메타 같이 게시
+                resp = client.files_upload_v2(
+                    channel=ch,
+                    file=str(file_path),
+                    filename=sub.file_name,
+                    title=f"{presenter} — {title}",
+                    initial_comment=text,
+                )
+                # files_upload_v2 응답에 ts 가 일관적이지 않아 message lookup 생략
+            else:
+                # 파일 없으면 텍스트만 (방어)
+                resp = client.chat_postMessage(channel=ch, text=text)
+                if primary_ts is None:
+                    primary_ts = resp.get("ts")
         except Exception as e:
-            log.warning("submission announce → %s 실패: %s", ch, e)
+            log.warning("submission distribute → %s 실패: %s", ch, e)
 
     if primary_ts:
         with session(DB_PATH) as conn:
             submission_service.set_announce_ts(conn, submission_id, primary_ts)
+
+
+def distribute_submission(
+    client: WebClient, conn, submission_id: int,
+) -> tuple[bool, str]:
+    """단일 submission 재배포. (성공여부, 메시지) 반환. 운영자 명령에서 사용."""
+    sub = submission_service.get(conn, submission_id)
+    if sub is None:
+        return False, f"submission {submission_id} 없음"
+    if sub.status != "ingested":
+        return False, f"아직 ingest 완료 안 됨 (status={sub.status})"
+
+    announce_channel_submission(
+        client,
+        presenter=sub.presenter,
+        seminar_date=sub.seminar_date,
+        title=sub.title or sub.file_name,
+        summary=sub.summary or "",
+        tags=sub.tags or [],
+        page_count=sub.page_count or 0,
+        slack_file_id=sub.slack_file_id or "",
+        submission_id=submission_id,
+    )
+    return True, f"#{submission_id} 배포 완료"
 from . import messages
 
 log = logging.getLogger(__name__)

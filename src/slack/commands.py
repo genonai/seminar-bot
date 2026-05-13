@@ -274,6 +274,65 @@ def register(app: App) -> None:
 
         respond(text="\n".join(lines), response_type="ephemeral")
 
+    @app.command("/세미나-배포")
+    def handle_distribute(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
+        """운영자 한정. ingest 된 자료 채널에 배포 (PDF 첨부).
+        인자 없으면 가까운 회차의 모든 ingested 자료. 'all' 이면 모든 ingested.
+        """
+        ack()
+        user_id = body["user_id"]
+        log.info("/세미나-배포 user=%s arg=%r", user_id, body.get("text"))
+        if not admin_service.is_admin(user_id):
+            guards.reject_non_admin(respond)
+            return
+        if not guards.in_seminar_channel(body):
+            guards.reject_wrong_channel(respond)
+            return
+
+        arg = (body.get("text") or "").strip()
+        today = date.today()
+
+        with session(DB_PATH) as conn:
+            if arg.lower() == "all":
+                subs = submission_service.list_ingested(conn, limit=50)
+            elif arg:
+                # YYYY-MM-DD 또는 자유 텍스트 → 가까운 일정 후 그 날짜
+                try:
+                    target = date.fromisoformat(arg)
+                except Exception:
+                    respond(text=f":x: 날짜 형식 오류 (YYYY-MM-DD 또는 'all'). 받은: {arg!r}",
+                            response_type="ephemeral")
+                    return
+                subs = submission_service.get_for_seminar(conn, target)
+            else:
+                upcoming = schedule_service.get_upcoming(conn, today=today, limit=1)
+                if not upcoming:
+                    respond(text=":information_source: 다가올 일정 없음.", response_type="ephemeral")
+                    return
+                subs = submission_service.get_for_seminar(conn, upcoming[0].date)
+
+        if not subs:
+            respond(text=":notebook: 배포할 ingested 자료가 없습니다.",
+                    response_type="ephemeral")
+            return
+
+        sent: list[str] = []
+        failed: list[str] = []
+        with session(DB_PATH) as conn:
+            for sub in subs:
+                ok, msg = flows.distribute_submission(client, conn, sub.id)
+                if ok:
+                    sent.append(f"#{sub.id} {sub.presenter} ({sub.seminar_date.isoformat()})")
+                else:
+                    failed.append(f"#{sub.id}: {msg}")
+
+        lines = [":outbox_tray: *배포 결과*"]
+        if sent:
+            lines.append(":white_check_mark: " + ", ".join(sent))
+        if failed:
+            lines.append(":warning: " + " / ".join(failed))
+        respond(text="\n".join(lines), response_type="ephemeral")
+
     @app.command("/세미나-안내")
     def handle_seminar_note(ack: Ack, body: dict, respond: Respond, client: WebClient) -> None:
         """운영자 한정. 다가올 회차에 운영 안내 노트 등록/수정."""
