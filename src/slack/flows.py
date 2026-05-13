@@ -131,13 +131,27 @@ def process_submission_async(
         ),
     )
 
-    # 4) 채널 공지 (테스트 모드면 skip)
+    # 4) 채널 공지
+    #    - 테스트 모드: skip
+    #    - 세미나가 7일 이내 (이번 주 영역): 즉시 게시
+    #    - 그보다 미래 (1주+ 남음): 보류, 목요일 09:00 cron 이 자동 배포
     if not is_test:
-        announce_channel_submission(
-            client, presenter=presenter, seminar_date=seminar_date,
-            title=title, summary=summary, tags=result.get("tags") or [],
-            page_count=page_count, slack_file_id=file_id, submission_id=submission_id,
-        )
+        days_until = (seminar_date - date.today()).days
+        if days_until <= 7:
+            announce_channel_submission(
+                client, presenter=presenter, seminar_date=seminar_date,
+                title=title, summary=summary, tags=result.get("tags") or [],
+                page_count=page_count, slack_file_id=file_id, submission_id=submission_id,
+            )
+        else:
+            client.chat_postMessage(
+                channel=dm_channel,
+                text=(
+                    f":hourglass: 발표일이 *{days_until}일* 남아서 채널 배포는 보류합니다. "
+                    f"세미나 당일 아침에 자동으로 채널에 공유될 거예요."
+                ),
+            )
+            log.info("submission %d: %d일 후 발표 — 채널 배포 보류", submission_id, days_until)
 
 
 def announce_channel_submission(
@@ -175,29 +189,32 @@ def announce_channel_submission(
     file_path = Path(sub.file_path) if sub else None
 
     primary_ts: str | None = None
+    any_success = False
     for ch in BROADCAST_CHANNELS:
         try:
             if file_path and file_path.exists():
                 # PDF 첨부 + initial_comment 로 메타 같이 게시
-                resp = client.files_upload_v2(
+                client.files_upload_v2(
                     channel=ch,
                     file=str(file_path),
                     filename=sub.file_name,
                     title=f"{presenter} — {title}",
                     initial_comment=text,
                 )
-                # files_upload_v2 응답에 ts 가 일관적이지 않아 message lookup 생략
+                any_success = True
             else:
                 # 파일 없으면 텍스트만 (방어)
                 resp = client.chat_postMessage(channel=ch, text=text)
                 if primary_ts is None:
                     primary_ts = resp.get("ts")
+                any_success = True
         except Exception as e:
             log.warning("submission distribute → %s 실패: %s", ch, e)
 
-    if primary_ts:
+    # 한 채널이라도 성공했으면 announce_ts 기록 (재배포 방지용 마커)
+    if any_success:
         with session(DB_PATH) as conn:
-            submission_service.set_announce_ts(conn, submission_id, primary_ts)
+            submission_service.set_announce_ts(conn, submission_id, primary_ts or "distributed")
 
 
 def distribute_submission(
