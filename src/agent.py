@@ -261,7 +261,9 @@ mutation 요청 (set_topic / set_seminar_note / start_defer_flow / start_prefere
 send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에요").
 
 # 도구 선택 가이드
-- 본인 발표 토픽 알려옴 → set_topic(target_presenter=null, topic=…)
+- 본인 발표 토픽 → set_topic(*target_presenter=null*, topic=…)
+   - 자기 자신 가리키는 모든 표현 ('내 토픽은', '제 토픽', '저는', 자기 이름, 자기 mention '<@U...>') → target_presenter=null
+   - 절대 호출자 본인 이름을 target_presenter 에 넣지 말 것
 - 다른 발표자의 토픽 지정 ('허성환은 X', 'X님 토픽 Y' 등) → set_topic(target_presenter='이름', topic=…)
    - 단, 호출자가 admin 이 아니면 send_message 로 정중히 거절
 - 회차 운영 안내 ('5/14 회의실 B', '이번주 휴무' 등) → set_seminar_note (admin 만)
@@ -468,6 +470,42 @@ def _dispatch(
 # ─────────────────────────────────────────────────────────────
 # 개별 tool 실행
 # ─────────────────────────────────────────────────────────────
+def _norm_name(s: str | None) -> str:
+    """이름 비교용 정규화 — 공백, 호칭(님/씨), 대소문자 제거."""
+    if not s:
+        return ""
+    out = s.strip()
+    # slack mention 형식 처리
+    if out.startswith("<@") and ">" in out:
+        out = out[2:out.index(">")].split("|")[0]
+    # 한국어 호칭 제거
+    for suffix in ("님", "씨"):
+        if out.endswith(suffix):
+            out = out[: -len(suffix)]
+    return out.strip().lower()
+
+
+_SELF_PRONOUNS = {
+    "내", "제", "저", "본인", "나",
+    "self", "me", "myself", "i",
+}
+
+
+def _is_self_target(target: str, *, caller_member, slack_user_id: str) -> bool:
+    """target_presenter 가 호출자 자기 자신을 가리키는지."""
+    norm = _norm_name(target)
+    if not norm:
+        return True
+    if norm in _SELF_PRONOUNS:
+        return True
+    if caller_member and norm == _norm_name(caller_member.name):
+        return True
+    # slack user id 직접 매칭
+    if norm == slack_user_id.lower():
+        return True
+    return False
+
+
 def _tool_set_topic(
     client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
     *, caller_member, is_admin: bool, today: date,
@@ -479,11 +517,16 @@ def _tool_set_topic(
              "토픽이 명확하지 않아요. 한 줄로 알려주세요.")
         return
 
+    if target and _is_self_target(target, caller_member=caller_member, slack_user_id=slack_user_id):
+        target = None
+
     if target:
-        target = target.strip()
-        # 본인 이름과 같으면 self 모드로
-        if caller_member and target == caller_member.name:
-            target = None
+        # 추가로 slack mention 형식이면 member 조회로 정규화
+        norm = _norm_name(target)
+        if target.startswith("<@") and ">" in target:
+            uid = target[2:target.index(">")].split("|")[0]
+            m = member_service.get_by_slack_id(conn, uid)
+            target = m.name if m else target
 
     if target:
         # On-behalf-of: admin only
