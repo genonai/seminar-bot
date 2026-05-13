@@ -70,6 +70,7 @@ Bot Token Scopes:
 - `channels:read` — **채널 멤버십 sync (없으면 sync 동작 안 함, 봇은 동작)**
 - `files:read` — **`/제출` 모달로 업로드된 PDF 다운로드**
 - `files:write` — **자료 분석 후 채널에 PDF 첨부 재게시**
+- `channels:history` — **봇 메시지 일괄 삭제 (cleanup_recent.py 운영자 도구)**
 
 Event Subscriptions (Bot Events):
 - `message.im` — 봇 DM 메시지 수신
