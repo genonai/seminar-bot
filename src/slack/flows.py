@@ -148,7 +148,7 @@ def process_submission_async(
                 channel=dm_channel,
                 text=(
                     f":hourglass: 발표일이 *{days_until}일* 남아서 채널 배포는 보류합니다. "
-                    f"세미나 당일 아침에 자동으로 채널에 공유될 거예요."
+                    f"세미나 전날 *수요일 14:00* 에 자동으로 채널에 공유될 거예요."
                 ),
             )
             log.info("submission %d: %d일 후 발표 — 채널 배포 보류", submission_id, days_until)

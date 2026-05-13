@@ -87,14 +87,15 @@ def _job_topic_reminder(client: WebClient) -> None:
         notification_service.send_topic_reminders(client, conn, today)
 
 
-def _job_thursday_distribute(client: WebClient) -> None:
-    """목요일 아침 — 오늘 발표 자료 중 아직 배포 안 된 ingested 자료들 자동 게시."""
+def _job_wednesday_distribute(client: WebClient) -> None:
+    """수요일 14:00 — 내일(목) 발표 자료 중 아직 배포 안 된 ingested 자료 자동 게시."""
     from .slack import flows
     today = date.today()
-    if today.weekday() != 3:
+    if today.weekday() != 2:
         return
+    target_thu = today + timedelta(days=1)
     with session(DB_PATH) as conn:
-        subs = submission_service.get_for_seminar(conn, today)
+        subs = submission_service.get_for_seminar(conn, target_thu)
         for sub in subs:
             if sub.announce_ts:
                 log.info("distribute skip (already announced): submission %d", sub.id)
@@ -118,10 +119,10 @@ def start_scheduler(client: WebClient) -> BackgroundScheduler:
         id="thursday_announce", replace_existing=True,
     )
     scheduler.add_job(
-        _job_thursday_distribute, args=(client,),
-        # 목 09:00 — 오늘 발표자 ingested 자료 자동 배포 (announce_ts 없는 것만)
-        trigger=CronTrigger(day_of_week="thu", hour=9, minute=0, timezone=TIMEZONE),
-        id="thursday_distribute", replace_existing=True,
+        _job_wednesday_distribute, args=(client,),
+        # 수 14:00 (발표 전날 점심) — 내일(목) 발표자 ingested 자료 자동 배포
+        trigger=CronTrigger(day_of_week="wed", hour=14, minute=0, timezone=TIMEZONE),
+        id="wednesday_distribute", replace_existing=True,
     )
     scheduler.add_job(
         _job_thursday_complete, args=(client,),
