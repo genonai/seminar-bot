@@ -512,17 +512,26 @@ def _tool_set_topic(
 ) -> None:
     target = args.get("target_presenter")
     topic = (args.get("topic") or "").strip()
+    log.info("set_topic args: target=%r topic=%r caller=%s admin=%s",
+             target, topic, caller_member.name if caller_member else None, is_admin)
     if not topic:
         _say(client, conn, slack_user_id, dm_channel,
              "토픽이 명확하지 않아요. 한 줄로 알려주세요.")
         return
 
-    if target and _is_self_target(target, caller_member=caller_member, slack_user_id=slack_user_id):
+    # 핵심 규칙: 멤버는 본인 토픽만 등록 가능. admin 만 다른 발표자 대신 등록 가능.
+    # 따라서 비-admin 호출자는 target 을 무조건 무시 (self 강제).
+    # admin 일 때만 target 의미를 살리되, 호출자 자기 자신 가리키면 self.
+    if not is_admin:
+        if target:
+            log.info("set_topic: 비-admin 호출자 → target=%r 무시 self 강제", target)
+        target = None
+    elif target and _is_self_target(target, caller_member=caller_member, slack_user_id=slack_user_id):
+        log.info("set_topic: target=%r → self-normalized to null", target)
         target = None
 
     if target:
-        # 추가로 slack mention 형식이면 member 조회로 정규화
-        norm = _norm_name(target)
+        # admin 의 on-behalf-of: slack mention 형식이면 member 조회로 정식 이름 정규화
         if target.startswith("<@") and ">" in target:
             uid = target[2:target.index(">")].split("|")[0]
             m = member_service.get_by_slack_id(conn, uid)
