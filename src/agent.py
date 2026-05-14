@@ -500,6 +500,13 @@ _SELF_PRONOUNS = {
 }
 
 
+def _topics_overlap(a: str, b: str) -> bool:
+    """case-insensitive + whitespace normalize 후 동일 여부."""
+    na = " ".join((a or "").lower().split())
+    nb = " ".join((b or "").lower().split())
+    return bool(na) and na == nb
+
+
 def _is_self_target(target: str, *, caller_member, slack_user_id: str) -> bool:
     """target_presenter 가 호출자 자기 자신을 가리키는지."""
     norm = _norm_name(target)
@@ -575,6 +582,26 @@ def _tool_set_topic(
                  ":information_source: 다가올 발표 일정이 없어 토픽 등록 대상이 아닙니다.")
             return
         seminar_date, presenter = assignment
+
+    # 같은 날 다른 슬롯이 같은 토픽 이미 등록했는지 검사
+    schedule = schedule_service.get_by_date(conn, seminar_date)
+    if schedule:
+        if schedule.slot_1 == presenter:
+            other_slot_presenter, other_slot_topic = schedule.slot_2, schedule.slot_2_topic
+        elif schedule.slot_2 == presenter:
+            other_slot_presenter, other_slot_topic = schedule.slot_1, schedule.slot_1_topic
+        else:
+            other_slot_presenter, other_slot_topic = None, None
+        if other_slot_topic and _topics_overlap(topic, other_slot_topic):
+            _say(
+                client, conn, slack_user_id, dm_channel,
+                f":no_entry_sign: 같은 날 *{other_slot_presenter}*님이 이미 같은 토픽으로 등록했어요.\n"
+                f"> _{other_slot_topic}_\n"
+                "다른 각도/제목으로 차별화 부탁드립니다.",
+            )
+            log.info("topic conflict: %s/%s same as %s/%s on %s",
+                     presenter, topic[:60], other_slot_presenter, other_slot_topic[:60], seminar_date)
+            return
 
     ok = schedule_service.set_topic(conn, seminar_date, presenter, topic)
     if ok:
