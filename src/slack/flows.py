@@ -487,6 +487,7 @@ def _answer_schedule(
         user_assignment=user_assignment,
         user_message=text,
     )
+    log.info("answer_schedule q=%r → a=%r", text[:80], (answer or "")[:200])
     if answer:
         client.chat_postMessage(channel=dm_channel, text=answer)
 
@@ -674,6 +675,7 @@ def _answer_material(
         return
 
     answer = llm_service.synthesize_rag_answer(user_question=text, retrieved=retrieved)
+    log.info("answer_material q=%r → a=%r (hits=%d)", text[:80], (answer or "")[:200], len(retrieved))
     if answer:
         client.chat_postMessage(channel=dm_channel, text=answer)
 
