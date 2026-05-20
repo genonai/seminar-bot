@@ -13,5 +13,7 @@ services:
       # .env의 DB_PATH는 컨테이너 내부 경로여야 함 (호스트 경로 X)
       DB_PATH: /var/lib/seminar-bot/seminar.db
       TZ: Asia/Seoul
+    ports:
+      # debug API (localhost only on host → SSH 터널로 외부 접근)
+      - "127.0.0.1:8000:8000"
     init: true
-    # Socket Mode라 inbound 포트 노출 안 함

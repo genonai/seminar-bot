@@ -112,3 +112,8 @@ SLOTS_PER_WEEK: int = 2
 
 # 대체자 거절 시 차순위 시도 횟수 (초과 시 진재님 escalation)
 MAX_REPLACEMENT_ATTEMPTS: int = 3
+
+# Debug HTTP API
+API_TOKEN: str | None = os.getenv("API_TOKEN")
+API_PORT: int = int(os.getenv("API_PORT", "8000"))
+API_BIND: str = os.getenv("API_BIND", "0.0.0.0")

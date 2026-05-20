@@ -14,6 +14,8 @@ dependencies = [
   "pillow>=10.0",             # pypdfium2.to_pil() 의존
   "chromadb>=0.5",            # 임베디드 vector DB (HNSW, BYOV)
   "httpx>=0.27",              # Slack 파일 다운로드
+  "fastapi>=0.115",           # debug HTTP API
+  "uvicorn[standard]>=0.30",  # ASGI server
 ]
 
 [project.optional-dependencies]

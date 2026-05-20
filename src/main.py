@@ -2,21 +2,37 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from .api import start_api_server
 from .config import ADMIN_USER_IDS, DB_PATH, LOG_LEVEL, SLACK_APP_TOKEN
 from .db import init_schema, session
 from .scheduler import start_scheduler
 from .services import admin_service, member_service
 from .slack.app import build_app
 
+_LOG_FMT = "%(asctime)s %(levelname)-7s %(name)s :: %(message)s"
+LOG_FILE: Path = Path(DB_PATH).parent / "bot.log"
+
+
+def _setup_logging() -> None:
+    logging.basicConfig(level=LOG_LEVEL, format=_LOG_FMT)
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        fh.setFormatter(logging.Formatter(_LOG_FMT))
+        fh.setLevel(LOG_LEVEL)
+        logging.getLogger().addHandler(fh)
+        logging.info("file logging → %s (rotate 10MB x 3)", LOG_FILE)
+    except Exception as e:
+        logging.warning("file handler setup 실패 (계속): %s", e)
+
 
 def main() -> None:
-    logging.basicConfig(
-        level=LOG_LEVEL,
-        format="%(asctime)s %(levelname)-7s %(name)s :: %(message)s",
-    )
+    _setup_logging()
     if not SLACK_APP_TOKEN:
         raise RuntimeError("SLACK_APP_TOKEN 미설정 (.env 확인)")
 
@@ -39,6 +55,7 @@ def main() -> None:
             logging.info("startup sync: %d active 멤버", len(active))
 
     start_scheduler(app.client)            # APScheduler 백그라운드 스레드
+    start_api_server()                      # FastAPI debug 엔드포인트
     logging.info("Socket Mode 시작 — Ctrl+C로 종료")
     handler.start()
 
