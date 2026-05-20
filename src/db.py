@@ -133,6 +133,9 @@ MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("schedule", "slot_1_topic", "TEXT"),
     ("schedule", "slot_2_topic", "TEXT"),
     ("schedule", "notes", "TEXT"),
+    # 채널엔 있지만 발표 풀에서 의도적으로 제외 (관찰자, 휴직, 게스트 등).
+    # is_active 와 별개로 운영자가 명시적으로 toggle. 둘 다 OK 일 때만 풀 후보.
+    ("members", "excluded", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 

@@ -33,9 +33,33 @@ def get_all(conn: sqlite3.Connection) -> list[Member]:
 
 
 def get_all_active(conn: sqlite3.Connection) -> list[Member]:
-    """현재 채널에 있고 풀에 포함되는 멤버만. 추첨/대체자 선정에 쓴다."""
-    rows = conn.execute("SELECT * FROM members WHERE is_active = 1 ORDER BY name").fetchall()
+    """추첨/대체자 선정 풀. 채널 멤버(is_active=1) + 운영자 제외 안 함(excluded=0)."""
+    rows = conn.execute(
+        "SELECT * FROM members WHERE is_active = 1 AND COALESCE(excluded, 0) = 0 ORDER BY name"
+    ).fetchall()
     return [_row_to_member(r) for r in rows]
+
+
+def list_excluded(conn: sqlite3.Connection) -> list[dict]:
+    """운영자가 발표 풀에서 명시적으로 제외한 멤버들."""
+    rows = conn.execute(
+        "SELECT name, slack_user_id, is_active FROM members "
+        "WHERE COALESCE(excluded, 0) = 1 ORDER BY name"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_excluded(conn: sqlite3.Connection, slack_user_id: str, excluded: bool) -> tuple[bool, str]:
+    """발표 풀에서 제외/포함 toggle. (성공여부, 이름 또는 이유)."""
+    row = conn.execute("SELECT name FROM members WHERE slack_user_id = ?", (slack_user_id,)).fetchone()
+    if row is None:
+        return False, "members 에 없음 — 채널 멤버 sync 후 다시 시도"
+    with conn:
+        conn.execute(
+            "UPDATE members SET excluded = ? WHERE slack_user_id = ?",
+            (1 if excluded else 0, slack_user_id),
+        )
+    return True, row["name"]
 
 
 def get_by_name(conn: sqlite3.Connection, name: str) -> Member | None:

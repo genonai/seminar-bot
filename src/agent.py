@@ -223,6 +223,30 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "set_member_pool",
+            "description": (
+                "발표 풀 멤버 제외/포함 toggle. 운영자만. 채널엔 있지만 발표 안 하는 멤버(관찰자/휴직/게스트)를 풀에서 빼는 용도. "
+                "사용자 메시지가 '노거현은 발표 안 함', 'X는 풀에서 빼줘', 'Y 다시 포함' 같으면 호출."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_name": {
+                        "type": "string",
+                        "description": "발표 풀에서 제외/포함할 멤버 이름 (한국어). 'X는 풀에서 빼' 의 X.",
+                    },
+                    "excluded": {
+                        "type": "boolean",
+                        "description": "true=제외 (풀에서 뺌), false=포함 (다시 풀에 넣음)",
+                    },
+                },
+                "required": ["target_name", "excluded"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_message",
             "description": "위 도구 어디에도 해당 안 되는 경우 사용자에게 일반 텍스트 응답 (인사, 모호한 질문 안내, 거절, 잡담 등).",
             "parameters": {
@@ -277,6 +301,8 @@ send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에
    - 본인 신청은 호출자 user_id 를 '<@U...>' 멘션 형태로 content 에 넣어라 (사용자 이름 정보가 있다면 'name (<@U...>)' 도 OK)
 - *메모 조회* ('이번 세션 누가 참가?', '오프라인 신청자 명단', '운영 todo' 등) → list_memos
    - 결과를 사용자에게 자연어로 정리해 응답
+- *발표 풀 멤버십 변경* (운영자만): 'X는 풀에서 빼줘' / 'Y는 발표 안 함' / 'Z 다시 포함'
+  → set_member_pool(target_name='X', excluded=true/false)
 - *권한/지식 밖* — 봇이 답할 수 없거나 운영자 판단 필요 → escalate_to_admin
    - 예: '회의실 예약 좀', '발표비 정산', '봇 기능에 없는 외부 시스템 연동 요청' 등
 - 인사/잡담/그 외 → send_message
@@ -405,7 +431,7 @@ def run(
 # ─────────────────────────────────────────────────────────────
 # Dispatcher
 # ─────────────────────────────────────────────────────────────
-MUTATION_TOOLS = {"set_topic", "set_seminar_note", "start_defer_flow", "start_preference_flow"}
+MUTATION_TOOLS = {"set_topic", "set_seminar_note", "start_defer_flow", "start_preference_flow", "set_member_pool"}
 
 
 def _dispatch(
@@ -470,6 +496,10 @@ def _dispatch(
 
     if tool_name == "escalate_to_admin":
         _tool_escalate(client, conn, slack_user_id, dm_channel, args)
+        return
+
+    if tool_name == "set_member_pool":
+        _tool_set_member_pool(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin)
         return
 
     log.warning("unknown tool: %s", tool_name)
@@ -714,6 +744,38 @@ def _tool_list_memos(
             lines.append(f"  • {r['content']}{sem}")
 
     _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+
+
+def _tool_set_member_pool(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+    *, is_admin: bool,
+) -> None:
+    if not is_admin:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":no_entry_sign: 발표 풀 관리는 운영자만 가능합니다.")
+        return
+    target_name = (args.get("target_name") or "").strip()
+    excluded = bool(args.get("excluded"))
+    if not target_name:
+        _say(client, conn, slack_user_id, dm_channel,
+             "어떤 멤버를 제외/포함할지 이름을 알려주세요.")
+        return
+    m = member_service.get_by_name(conn, target_name)
+    if m is None:
+        _say(client, conn, slack_user_id, dm_channel,
+             f":x: '{target_name}' 멤버를 찾지 못했어요. 정확한 이름 다시 확인 부탁드립니다.")
+        return
+    ok, info = member_service.set_excluded(conn, m.slack_user_id, excluded)
+    if not ok:
+        _say(client, conn, slack_user_id, dm_channel, f":x: 실패: {info}")
+        return
+    if excluded:
+        _say(client, conn, slack_user_id, dm_channel,
+             f":mute: *{m.name}* 발표 풀에서 제외됨. 추첨/대체자 후보에 안 들어갑니다.")
+    else:
+        _say(client, conn, slack_user_id, dm_channel,
+             f":speaker: *{m.name}* 발표 풀에 다시 포함됨.")
+    log.info("set_member_pool: %s excluded=%s by %s", m.name, excluded, slack_user_id)
 
 
 def _tool_escalate(

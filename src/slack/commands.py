@@ -458,6 +458,62 @@ def register(app: App) -> None:
             msg_parts.append("발표자 배정 없음")
         respond(text="\n".join(msg_parts), response_type="ephemeral")
 
+    # ─── 발표 풀 제외 관리 ──────────────────────────────────
+    @app.command("/세미나-제외")
+    def handle_exclude(ack: Ack, body: dict, respond: Respond) -> None:
+        """운영자. 채널엔 있지만 발표 풀에서 빼고 싶은 멤버를 제외 처리."""
+        ack()
+        if not admin_service.is_admin(body["user_id"]):
+            guards.reject_non_admin(respond)
+            return
+        target = _parse_slack_user(body.get("text", "") or "")
+        if target is None:
+            respond(text="형식: `/세미나-제외 @사용자`", response_type="ephemeral")
+            return
+        with session(DB_PATH) as conn:
+            ok, info = member_service.set_excluded(conn, target, True)
+        if ok:
+            respond(text=f":mute: *{info}* 발표 풀에서 제외됨. 추첨/대체자 후보에 안 들어갑니다.",
+                    response_type="ephemeral")
+        else:
+            respond(text=f":x: 실패: {info}", response_type="ephemeral")
+
+    @app.command("/세미나-포함")
+    def handle_include(ack: Ack, body: dict, respond: Respond) -> None:
+        """운영자. 제외했던 멤버를 다시 발표 풀에 포함."""
+        ack()
+        if not admin_service.is_admin(body["user_id"]):
+            guards.reject_non_admin(respond)
+            return
+        target = _parse_slack_user(body.get("text", "") or "")
+        if target is None:
+            respond(text="형식: `/세미나-포함 @사용자`", response_type="ephemeral")
+            return
+        with session(DB_PATH) as conn:
+            ok, info = member_service.set_excluded(conn, target, False)
+        if ok:
+            respond(text=f":speaker: *{info}* 발표 풀에 다시 포함됨.", response_type="ephemeral")
+        else:
+            respond(text=f":x: 실패: {info}", response_type="ephemeral")
+
+    @app.command("/세미나-제외-목록")
+    def handle_exclude_list(ack: Ack, body: dict, respond: Respond) -> None:
+        """운영자. 현재 발표 풀에서 제외된 멤버 목록."""
+        ack()
+        if not admin_service.is_admin(body["user_id"]):
+            guards.reject_non_admin(respond)
+            return
+        with session(DB_PATH) as conn:
+            rows = member_service.list_excluded(conn)
+        if not rows:
+            respond(text=":speaker: 제외된 멤버 없음.", response_type="ephemeral")
+            return
+        lines = [":mute: *발표 풀 제외 멤버*"]
+        for r in rows:
+            in_ch = "" if r["is_active"] else " _(채널 떠남)_"
+            lines.append(f"• <@{r['slack_user_id']}> ({r['name']}){in_ch}")
+        respond(text="\n".join(lines), response_type="ephemeral")
+
     # ─── 운영자 관리 ──────────────────────────────────────────
     @app.command("/어드민-추가")
     def handle_admin_add(ack: Ack, body: dict, respond: Respond) -> None:
