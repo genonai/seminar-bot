@@ -121,13 +121,8 @@ SUBMIT_PREFERENCES_TOOL: dict[str, Any] = {
                     "items": {"type": "integer", "minimum": 1, "maximum": 5},
                     "description": "회피 월내 주차 1~5, 없으면 빈 배열",
                 },
-                "preferred_slot": {
-                    "type": ["integer", "null"],
-                    "enum": [1, 2, None],
-                    "description": "1부 / 2부 / 상관 없음(null)",
-                },
             },
-            "required": ["avoid_dates", "avoid_weeks_of_month", "preferred_slot"],
+            "required": ["avoid_dates", "avoid_weeks_of_month"],
         },
     },
 }
@@ -421,12 +416,12 @@ def extract_seminar_note(
 ) -> dict[str, Any]:
     """운영자 자연어 메시지에서 (target_date, notes) 추출.
 
-    upcoming: [{date, slot_1, slot_2}, ...] (가까운 순)
+    upcoming: [{date, slot_1}, ...] (가까운 순)
     Returns: {"target_date": "YYYY-MM-DD" or null, "notes": str}
     target_date 추정 못 하면 가장 가까운 일정으로. notes 빈 문자열이면 의도 X.
     """
     schedules_text = "\n".join(
-        f"- {s.get('date')}: 1부 {s.get('slot_1','—')} / 2부 {s.get('slot_2','—')}"
+        f"- {s.get('date')} 14:00: {s.get('slot_1','—')}"
         for s in upcoming[:6]
     ) or "(다가올 일정 없음)"
 
@@ -627,7 +622,7 @@ route_intent tool을 반드시 한 번 호출한다.
 
 분류 가이드
 - defer: 본인 발표를 연기하고 싶다는 의사가 보임. "못해", "휴가", "미뤄줘", "변경", 날짜 + 부정문 등.
-- preference: 평상시 발표 선호 등록 (예: "월말 회피", "1부 선호", "5월 둘째주 휴가 예정")
+- preference: 평상시 발표 선호 등록 (예: "월말 회피", "5월 둘째주 휴가 예정")
 - schedule_question: 일정/발표자에 대한 단순 조회. (예: '내 차례 언제?', '5/21 누구?')
 - material_question: 발표 자료 내용에 대한 질문 (자료 검색 미리보기 참조).
 - topic_registration: 본인이 다룰 토픽을 알리려는 의사. (예: '이번에 LLM agent 발표할게요', '내 토픽은 RAG 비교')
@@ -667,7 +662,6 @@ def preferences_system_prompt(*, member_name: str, current_prefs: str) -> str:
 추출 항목
 - avoid_dates: 회피 날짜 (YYYY-MM-DD)
 - avoid_weeks_of_month: 회피 월내 주차 1~5 (예: '월말은 항상 바쁨' → [4, 5])
-- preferred_slot: 1(1부 14:00) / 2(2부 14:30) / null(상관 없음)
 
 규칙
 - 한국어 짧고 친근하게

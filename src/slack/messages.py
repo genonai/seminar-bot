@@ -35,14 +35,10 @@ def upcoming_schedule(
 
     lines: list[str] = [":calendar: *다가올 세미나 일정*", ""]
     for s in schedules:
-        viewer_in_slot = (
-            (s.slot_1 and name_to_slack.get(s.slot_1) == viewer_user_id)
-            or (s.slot_2 and name_to_slack.get(s.slot_2) == viewer_user_id)
-        )
+        viewer_in_slot = bool(s.slot_1 and name_to_slack.get(s.slot_1) == viewer_user_id)
         marker = ":star:" if viewer_in_slot else "  "
         slot_1 = s.slot_1 or "_미정_"
-        slot_2 = s.slot_2 or "_미정_"
-        lines.append(f"{marker} *{fmt_date(s.date)}* — 1부: {slot_1} / 2부: {slot_2}")
+        lines.append(f"{marker} *{fmt_date(s.date)}* 14:00 — {slot_1}")
     return "\n".join(lines)
 
 
@@ -62,7 +58,7 @@ def preference_kickoff(member_name: str, current_summary: str) -> str:
     return (
         f":wave: 안녕하세요 *{member_name}*님. 평상시 발표 선호도 등록 도와드릴게요.\n"
         f"현재 저장된 값: {current_summary}\n"
-        "회피 날짜, 회피하고 싶은 월내 주차 (예: 매달 마지막주), 1부/2부 선호 등을 자유롭게 알려주세요."
+        "회피 날짜, 회피하고 싶은 월내 주차 (예: 매달 마지막주) 등을 자유롭게 알려주세요."
     )
 
 
@@ -114,12 +110,10 @@ def defer_preview_blocks(*, draft_id: int, payload: dict[str, Any], assigned: da
 def preference_preview_blocks(*, draft_id: int, payload: dict[str, Any]) -> list[dict[str, Any]]:
     avoid_dates = payload.get("avoid_dates") or []
     avoid_weeks = payload.get("avoid_weeks_of_month") or []
-    slot = payload.get("preferred_slot")
 
     fields: list[str] = []
     fields.append(f"*회피 날짜:*\n{', '.join(avoid_dates) if avoid_dates else '없음'}")
     fields.append(f"*회피 주차:*\n{', '.join(map(str, avoid_weeks)) if avoid_weeks else '없음'}")
-    fields.append(f"*선호 슬롯:*\n{ {1: '1부', 2: '2부'}.get(slot, '상관 없음') }")
 
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": ":mag: *선호도 등록 미리보기*"}},

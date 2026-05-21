@@ -9,7 +9,7 @@ def seminar_note_modal(upcoming: list, default_idx: int = 0) -> dict:
     """`/세미나-안내` 운영자 — 회차 선택 + 노트 입력. upcoming: list[Schedule]."""
     options = []
     for i, s in enumerate(upcoming[:10]):
-        label = f"{s.date.isoformat()} — 1부 {s.slot_1 or '미정'} / 2부 {s.slot_2 or '미정'}"
+        label = f"{s.date.isoformat()} 14:00 — {s.slot_1 or '미정'}"
         options.append({
             "text": {"type": "plain_text", "text": label[:75]},
             "value": s.date.isoformat(),

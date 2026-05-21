@@ -242,28 +242,24 @@ def register(app: App) -> None:
             lines = [":clipboard: *운영자 현황* (다가올 5주)", ""]
             any_missing_topic = False
             for s in upcoming:
-                lines.append(f"*{messages.fmt_date(s.date)}*")
+                lines.append(f"*{messages.fmt_date(s.date)}* 14:00")
                 subs = {sub.presenter: sub for sub in submission_service.get_for_seminar(conn, s.date)}
-                for slot_name, topic, slot_label in [
-                    (s.slot_1, s.slot_1_topic, "1부"),
-                    (s.slot_2, s.slot_2_topic, "2부"),
-                ]:
-                    if not slot_name:
-                        lines.append(f"   {slot_label}: _빈 슬롯_")
-                        continue
+                if not s.slot_1:
+                    lines.append("   _빈 슬롯_")
+                else:
                     topic_mark = (
-                        f":white_check_mark: _{topic}_" if topic
+                        f":white_check_mark: _{s.slot_1_topic}_" if s.slot_1_topic
                         else ":x: 미등록"
                     )
-                    if not topic:
+                    if not s.slot_1_topic:
                         any_missing_topic = True
-                    sub = subs.get(slot_name)
+                    sub = subs.get(s.slot_1)
                     if sub:
                         mat_mark = f":white_check_mark: 제출 ({sub.page_count}p)"
                     else:
                         days = (s.date - today).days
                         mat_mark = ":hourglass: 미제출" if days <= 1 else "—"
-                    lines.append(f"   {slot_label} *{slot_name}* — 토픽: {topic_mark}  /  자료: {mat_mark}")
+                    lines.append(f"   *{s.slot_1}* — 토픽: {topic_mark}  /  자료: {mat_mark}")
                 if s.notes:
                     lines.append(f"   :pushpin: {s.notes}")
                 lines.append("")
@@ -423,31 +419,25 @@ def register(app: App) -> None:
 
             sent: list[str] = []
             already: list[str] = []
-            for slot_name, topic, slot_label in [
-                (next_s.slot_1, next_s.slot_1_topic, "1부"),
-                (next_s.slot_2, next_s.slot_2_topic, "2부"),
-            ]:
-                if not slot_name:
-                    continue
-                if topic:
-                    already.append(f"{slot_label} {slot_name} (이미 등록)")
-                    continue
-                m = member_service.get_by_name(conn, slot_name)
-                if m is None:
-                    continue
-                try:
-                    dm = client.conversations_open(users=m.slack_user_id)["channel"]["id"]
-                    msg = (
-                        f":memo: {next_s.date.month}/{next_s.date.day}(목) *{slot_label}* 발표 토픽이 아직 등록 안 됐어요.\n"
-                        "이번에 다룰 내용을 한 줄로 봇 DM에 보내주시면 자동 저장됩니다.\n"
-                        "예: _\"LLM agent ReAct vs Reflexion 비교\"_"
-                    )
-                    client.chat_postMessage(channel=dm, text=msg)
-                    conversation_service.append(conn, m.slack_user_id, "assistant", msg)
-                    sent.append(f"{slot_label} {slot_name}")
-                    log.info("topic remind DM → %s for %s", m.name, next_s.date)
-                except Exception as e:
-                    log.warning("topic remind DM → %s 실패: %s", m.name, e)
+            if next_s.slot_1:
+                if next_s.slot_1_topic:
+                    already.append(f"{next_s.slot_1} (이미 등록)")
+                else:
+                    m = member_service.get_by_name(conn, next_s.slot_1)
+                    if m is not None:
+                        try:
+                            dm = client.conversations_open(users=m.slack_user_id)["channel"]["id"]
+                            msg = (
+                                f":memo: {next_s.date.month}/{next_s.date.day}(목) 14:00 발표 토픽이 아직 등록 안 됐어요.\n"
+                                "이번에 다룰 내용을 한 줄로 봇 DM에 보내주시면 자동 저장됩니다.\n"
+                                "예: _\"LLM agent ReAct vs Reflexion 비교\"_"
+                            )
+                            client.chat_postMessage(channel=dm, text=msg)
+                            conversation_service.append(conn, m.slack_user_id, "assistant", msg)
+                            sent.append(next_s.slot_1)
+                            log.info("topic remind DM → %s for %s", m.name, next_s.date)
+                        except Exception as e:
+                            log.warning("topic remind DM → %s 실패: %s", m.name, e)
 
         msg_parts = [f":mailbox: 다가올 세미나 *{next_s.date.isoformat()}* 기준 토픽 알림 발송 결과:"]
         if sent:

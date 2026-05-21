@@ -14,7 +14,7 @@ from typing import Any
 class Preferences:
     avoid_dates: list[str] = field(default_factory=list)        # YYYY-MM-DD
     avoid_weeks_of_month: list[int] = field(default_factory=list)  # 1~5
-    preferred_slot: int | None = None                            # 1 / 2 / None
+    preferred_slot: int | None = None                            # deprecated — 1명/주 전환 후 무시. JSON 호환을 위해 필드는 유지.
 
     def to_json(self) -> str:
         return json.dumps(
@@ -61,13 +61,11 @@ class Schedule:
     notes: str | None = None                # 운영자 자유 노트 (장소/시간 변경/특이사항)
 
     def presenters(self) -> list[str]:
-        return [s for s in (self.slot_1, self.slot_2) if s]
+        return [self.slot_1] if self.slot_1 else []
 
     def topic_for(self, name: str) -> str | None:
         if self.slot_1 == name:
             return self.slot_1_topic
-        if self.slot_2 == name:
-            return self.slot_2_topic
         return None
 
 

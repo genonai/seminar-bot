@@ -88,25 +88,16 @@ def upsert(conn: sqlite3.Connection, s: Schedule) -> None:
 def set_topic(
     conn: sqlite3.Connection, target_date: date, presenter_name: str, topic: str
 ) -> bool:
-    """target_date의 slot_1 또는 slot_2가 presenter_name 이면 그 슬롯의 topic 갱신.
-    Returns True if updated."""
+    """target_date의 slot_1이 presenter_name 이면 topic 갱신. Returns True if updated."""
     s = get_by_date(conn, target_date)
-    if s is None:
+    if s is None or s.slot_1 != presenter_name:
         return False
     with conn:
-        if s.slot_1 == presenter_name:
-            conn.execute(
-                "UPDATE schedule SET slot_1_topic = ? WHERE date = ?",
-                (topic, target_date.isoformat()),
-            )
-            return True
-        if s.slot_2 == presenter_name:
-            conn.execute(
-                "UPDATE schedule SET slot_2_topic = ? WHERE date = ?",
-                (topic, target_date.isoformat()),
-            )
-            return True
-    return False
+        conn.execute(
+            "UPDATE schedule SET slot_1_topic = ? WHERE date = ?",
+            (topic, target_date.isoformat()),
+        )
+    return True
 
 
 def set_notes(conn: sqlite3.Connection, target_date: date, notes: str | None) -> bool:
@@ -142,14 +133,11 @@ def get_next_seminar(
 def replace_presenter(
     conn: sqlite3.Connection, target_date: date, old_name: str, new_name: str
 ) -> None:
-    """해당 날짜 schedule에서 old_name을 new_name으로 교체. 양쪽 슬롯 다 검사."""
+    """해당 날짜 schedule에서 old_name을 new_name으로 교체."""
     s = get_by_date(conn, target_date)
     if s is None:
         raise ValueError(f"{target_date} 일정 없음")
-    if s.slot_1 == old_name:
-        s.slot_1 = new_name
-    elif s.slot_2 == old_name:
-        s.slot_2 = new_name
-    else:
-        raise ValueError(f"{target_date} 일정에 {old_name} 없음 (slot_1={s.slot_1}, slot_2={s.slot_2})")
+    if s.slot_1 != old_name:
+        raise ValueError(f"{target_date} 일정에 {old_name} 없음 (slot_1={s.slot_1})")
+    s.slot_1 = new_name
     upsert(conn, s)

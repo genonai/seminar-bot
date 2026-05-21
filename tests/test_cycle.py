@@ -66,24 +66,12 @@ def test_generate_distinct_members_per_cycle() -> None:
     _seed_members(conn, ["A", "B", "C", "D", "E", "F", "G", "H", "I"])
     today = date(2026, 5, 5)
     _, schedules = cycle_service.generate_next_cycle(conn, today, seed=42)
-    assigned = []
+    # 1명/주 × 5주 → 5명 추첨, 모두 slot_2 비어 있음.
+    assigned = [s.slot_1 for s in schedules if s.slot_1]
+    assert len(assigned) == 5
+    assert len(set(assigned)) == 5
     for s in schedules:
-        if s.slot_1:
-            assigned.append(s.slot_1)
-        if s.slot_2:
-            assigned.append(s.slot_2)
-    # 9 members 모두 1번씩만 등장 (중복 없음)
-    assert len(assigned) == 9
-    assert len(set(assigned)) == 9
-
-
-def test_generate_last_slot_empty() -> None:
-    conn = _conn()
-    _seed_members(conn, ["A", "B", "C", "D", "E", "F", "G", "H", "I"])
-    today = date(2026, 5, 5)
-    _, schedules = cycle_service.generate_next_cycle(conn, today, seed=0)
-    # 9 멤버 / 10 슬롯 → 마지막 주 slot_2 가 None
-    assert schedules[4].slot_2 is None
+        assert s.slot_2 is None
 
 
 def test_avoid_dates_respected_in_assignment() -> None:
@@ -94,9 +82,7 @@ def test_avoid_dates_respected_in_assignment() -> None:
     today = date(2026, 5, 5)
     _, schedules = cycle_service.generate_next_cycle(conn, today, seed=0)
     # A는 5/7에 절대 안 들어가야 함 (cost +1000)
-    first = schedules[0]
-    assert first.slot_1 != "A"
-    assert first.slot_2 != "A"
+    assert schedules[0].slot_1 != "A"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -129,11 +115,10 @@ def test_mark_past_seminars_completed() -> None:
     completed = cycle_service.mark_past_seminars_completed(conn, today=date(2026, 5, 8))
     assert len(completed) == 1
     assert completed[0].date == date(2026, 5, 7)
-    # 발표자 stats 갱신 확인
+    # 1명/주: slot_1 발표자 1명만 stats 갱신
     rows = conn.execute(
         "SELECT name, presented_count, last_presented FROM members WHERE last_presented IS NOT NULL"
     ).fetchall()
-    assert len(rows) == 2  # slot_1, slot_2 둘 다 갱신
-    for r in rows:
-        assert r["presented_count"] == 1
-        assert r["last_presented"] == "2026-05-07"
+    assert len(rows) == 1
+    assert rows[0]["presented_count"] == 1
+    assert rows[0]["last_presented"] == "2026-05-07"

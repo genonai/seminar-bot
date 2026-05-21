@@ -1,7 +1,8 @@
 """사이클 자동 생성.
 
-cost function + 멤버 선호도를 사용해 다음 5주 슬롯을 그리디로 채운다.
-9 멤버 → 10 슬롯이라 마지막 슬롯 1개는 비워둔다 (운영자 수동 보충 가능).
+cost function + 멤버 선호도를 사용해 다음 5주를 그리디로 채운다 (1명/주, 14:00).
+멤버 수가 CYCLE_LENGTH_WEEKS 보다 적으면 뒷주는 비워두고 (운영자 수동 보충 가능).
+멤버 수가 더 많으면 다음 사이클에서 cost function 이 미발표 멤버를 우선 픽업.
 """
 from __future__ import annotations
 
@@ -44,21 +45,12 @@ def _greedy_assign(
     dates: list[date],
     *,
     rng: random.Random,
-) -> dict[date, dict[int, str | None]]:
-    """date 순서대로 (slot_1, slot_2) 슬롯에 cost 최저 멤버를 할당.
-
-    멤버 9 → 슬롯 10 이라 마지막 슬롯은 None.
-    동점일 때 비결정적 결과를 위해 cost 동률 후보 중에서 rng로 뽑는다.
-    """
-    assignment: dict[date, dict[int, str | None]] = {d: {1: None, 2: None} for d in dates}
+) -> dict[date, str | None]:
+    """date 순서대로 cost 최저 멤버를 1명씩 할당. 멤버가 모자라면 뒷주는 None."""
+    assignment: dict[date, str | None] = {d: None for d in dates}
     remaining = list(members)
 
-    slot_order = []
     for d in dates:
-        slot_order.append((d, 1))
-        slot_order.append((d, 2))
-
-    for d, slot_num in slot_order:
         if not remaining:
             break
         cycle_remaining_names = {m.name for m in remaining}
@@ -66,7 +58,7 @@ def _greedy_assign(
         min_score = min(s for s, _ in scored)
         ties = [m for s, m in scored if s == min_score]
         chosen = rng.choice(ties)
-        assignment[d][slot_num] = chosen.name
+        assignment[d] = chosen.name
         remaining = [m for m in remaining if m.name != chosen.name]
 
     return assignment
@@ -104,8 +96,8 @@ def generate_next_cycle(
         s = Schedule(
             date=d,
             reminder_date=d - timedelta(days=1),
-            slot_1=assignment[d][1],
-            slot_2=assignment[d][2],
+            slot_1=assignment[d],
+            slot_2=None,
             cycle_id=cycle_id,
         )
         schedule_service.upsert(conn, s)
@@ -132,9 +124,9 @@ def mark_past_seminars_completed(conn: sqlite3.Connection, today: date | None = 
     with conn:
         for row in rows:
             d = date.fromisoformat(row["date"])
-            for name in (row["slot_1"], row["slot_2"]):
-                if not name:
-                    continue
+            # 1명/주 전환 후 slot_1 만 카운트. slot_2 컬럼은 과거 데이터용으로 존재할 수 있으나 무시.
+            name = row["slot_1"]
+            if name:
                 # 자동 완료 시점에 presented_count++ 와 last_presented 갱신.
                 # last_presented는 더 최근 날짜만 반영 (옛 자료 catch-up 시 역행 방지).
                 conn.execute(

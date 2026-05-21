@@ -454,30 +454,21 @@ def _answer_schedule(
     lines: list[str] = []
     for s in upcoming:
         lines.append(
-            f"- {s.date.isoformat()} ({messages.WEEKDAY_KO[s.date.weekday()]}): "
-            f"1부 {_slot_str(s.slot_1, s.slot_1_topic)} / "
-            f"2부 {_slot_str(s.slot_2, s.slot_2_topic)}"
+            f"- {s.date.isoformat()} ({messages.WEEKDAY_KO[s.date.weekday()]}) 14:00: "
+            f"{_slot_str(s.slot_1, s.slot_1_topic)}"
             + (f"  📌 {s.notes}" if s.notes else "")
         )
     schedule_text = "\n".join(lines) or "(일정 없음)"
 
-    # 토픽 등록 통계 (질문이 '토픽 몇 명?' 류일 때 유용)
-    topic_filled = sum(
-        1 for s in upcoming for tp in (s.slot_1_topic, s.slot_2_topic) if tp
-    )
-    topic_slots = sum(
-        1 for s in upcoming for nm in (s.slot_1, s.slot_2) if nm
-    )
+    topic_filled = sum(1 for s in upcoming if s.slot_1_topic)
+    topic_slots = sum(1 for s in upcoming if s.slot_1)
     schedule_text += f"\n\n토픽 등록 통계: {topic_filled}/{topic_slots} 슬롯"
 
     user_assignment = "없음"
     if member is not None:
         for s in upcoming:
             if s.slot_1 == member.name:
-                user_assignment = f"{s.date.isoformat()} 1부"
-                break
-            if s.slot_2 == member.name:
-                user_assignment = f"{s.date.isoformat()} 2부"
+                user_assignment = s.date.isoformat()
                 break
 
     answer = llm_service.answer_schedule_question(
@@ -561,7 +552,7 @@ def _save_seminar_note(
 
     upcoming = schedule_service.get_upcoming(conn, today=today, limit=6)
     upcoming_payload = [
-        {"date": s.date.isoformat(), "slot_1": s.slot_1, "slot_2": s.slot_2}
+        {"date": s.date.isoformat(), "slot_1": s.slot_1}
         for s in upcoming
     ]
 
@@ -689,8 +680,6 @@ def _summarize_prefs(p: Preferences) -> str:
         parts.append(f"회피 날짜 {','.join(p.avoid_dates)}")
     if p.avoid_weeks_of_month:
         parts.append(f"회피 주차 {','.join(map(str, p.avoid_weeks_of_month))}")
-    if p.preferred_slot:
-        parts.append(f"선호 {p.preferred_slot}부")
     return "없음" if not parts else " / ".join(parts)
 
 
@@ -835,7 +824,6 @@ def confirm_preference(client: WebClient, *, draft_id: int, slack_user_id: str) 
         new_prefs = Preferences(
             avoid_dates=list(draft.pending_payload.get("avoid_dates") or []),
             avoid_weeks_of_month=list(draft.pending_payload.get("avoid_weeks_of_month") or []),
-            preferred_slot=draft.pending_payload.get("preferred_slot"),
         )
         preference_service.save(conn, member.name, new_prefs)
         draft_service.mark_submitted(conn, draft.id)
