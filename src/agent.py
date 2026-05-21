@@ -25,6 +25,7 @@ from .services import (
     defer_service,
     member_service,
     memo_service,
+    notification_service,
     schedule_service,
     vector_service,
 )
@@ -247,6 +248,27 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "broadcast_schedule",
+            "description": (
+                "운영자가 DM 에서 세미나 일정을 등록 채널(BROADCAST_CHANNELS)에 즉시 공지하고 싶을 때. "
+                "예: '채널에 일정 공유해', '일정 공지해', '이번주 발표자 채널에 알려'. 운영자만."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scope": {
+                        "type": "string",
+                        "enum": ["this_week", "upcoming"],
+                        "description": "this_week=가장 가까운 1회차만, upcoming=다가올 5주 일정 전체. 모호하면 upcoming.",
+                    },
+                },
+                "required": ["scope"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_message",
             "description": "위 도구 어디에도 해당 안 되는 경우 사용자에게 일반 텍스트 응답 (인사, 모호한 질문 안내, 거절, 잡담 등).",
             "parameters": {
@@ -303,6 +325,8 @@ send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에
    - 결과를 사용자에게 자연어로 정리해 응답
 - *발표 풀 멤버십 변경* (운영자만): 'X는 풀에서 빼줘' / 'Y는 발표 안 함' / 'Z 다시 포함'
   → set_member_pool(target_name='X', excluded=true/false)
+- *채널 일정 공지* (운영자만): '채널에 일정 공유해' / '일정 공지해' / '이번주 발표자 채널에 띄워'
+  → broadcast_schedule(scope='this_week' 또는 'upcoming'). 모호하면 upcoming.
 - *권한/지식 밖* — 봇이 답할 수 없거나 운영자 판단 필요 → escalate_to_admin
    - 예: '회의실 예약 좀', '발표비 정산', '봇 기능에 없는 외부 시스템 연동 요청' 등
 - 인사/잡담/그 외 → send_message
@@ -430,7 +454,7 @@ def run(
 # ─────────────────────────────────────────────────────────────
 # Dispatcher
 # ─────────────────────────────────────────────────────────────
-MUTATION_TOOLS = {"set_topic", "set_seminar_note", "start_defer_flow", "start_preference_flow", "set_member_pool"}
+MUTATION_TOOLS = {"set_topic", "set_seminar_note", "start_defer_flow", "start_preference_flow", "set_member_pool", "broadcast_schedule"}
 
 
 def _dispatch(
@@ -499,6 +523,10 @@ def _dispatch(
 
     if tool_name == "set_member_pool":
         _tool_set_member_pool(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin)
+        return
+
+    if tool_name == "broadcast_schedule":
+        _tool_broadcast_schedule(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin)
         return
 
     log.warning("unknown tool: %s", tool_name)
@@ -748,6 +776,27 @@ def _tool_set_member_pool(
         _say(client, conn, slack_user_id, dm_channel,
              f":speaker: *{m.name}* 발표 풀에 다시 포함됨.")
     log.info("set_member_pool: %s excluded=%s by %s", m.name, excluded, slack_user_id)
+
+
+def _tool_broadcast_schedule(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+    *, is_admin: bool,
+) -> None:
+    if not is_admin:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":no_entry_sign: 채널 공지는 운영자만 가능합니다.")
+        return
+    scope = (args.get("scope") or "upcoming").strip()
+    if scope not in {"this_week", "upcoming"}:
+        scope = "upcoming"
+    ok, info = notification_service.broadcast_schedule_summary(client, conn, scope=scope)
+    if ok:
+        label = "이번 주 회차" if scope == "this_week" else "다가올 5주 일정"
+        _say(client, conn, slack_user_id, dm_channel,
+             f":mega: 등록 채널에 *{label}* 공지 발송했습니다.")
+        log.info("broadcast_schedule by %s scope=%s", slack_user_id, scope)
+    else:
+        _say(client, conn, slack_user_id, dm_channel, f":x: 공지 실패: {info}")
 
 
 def _tool_escalate(

@@ -192,6 +192,39 @@ def announce_new_cycle(client: WebClient, schedules: list, cycle_id: int) -> Non
     broadcast(client, text="\n".join(lines))
 
 
+def broadcast_schedule_summary(
+    client: WebClient, conn: sqlite3.Connection, *, scope: str
+) -> tuple[bool, str]:
+    """운영자 ad-hoc 일정 broadcast. scope='this_week' | 'upcoming'."""
+    from ..slack import messages
+    upcoming = schedule_service.get_upcoming(conn, limit=5)
+    if not upcoming:
+        return False, "다가올 일정이 없습니다."
+
+    if scope == "this_week":
+        s = upcoming[0]
+        slot_1 = s.slot_1 or "_미정_"
+        topic_line = (
+            f"\n     ↳ 토픽: {s.slot_1_topic}" if s.slot_1_topic
+            else "\n     ↳ 토픽: _아직 미공유_"
+        )
+        note_line = f"\n:pushpin: *안내*: {s.notes}" if s.notes else ""
+        text = (
+            f":calendar: *{messages.fmt_date(s.date)} 14:00 — 주간 세미나*\n"
+            f"  • 발표: *{slot_1}*{topic_line}{note_line}"
+        )
+    else:  # upcoming
+        lines = [":calendar: *다가올 세미나 일정*", ""]
+        for s in upcoming:
+            slot_1 = s.slot_1 or "_미정_"
+            topic = f" — _{s.slot_1_topic}_" if s.slot_1_topic else ""
+            lines.append(f"• *{messages.fmt_date(s.date)}* 14:00 — {slot_1}{topic}")
+        text = "\n".join(lines)
+
+    broadcast(client, text=text)
+    return True, ""
+
+
 def _dm_with_memory(client: WebClient, conn: sqlite3.Connection, *, slack_user_id: str, channel: str, text: str) -> None:
     """사용자 DM 발송 + conversation_service 에 봇 발화로 기록."""
     client.chat_postMessage(channel=channel, text=text)
