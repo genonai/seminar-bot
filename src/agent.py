@@ -248,6 +248,17 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "admin_help",
+            "description": (
+                "운영자가 '도움말', '뭐 할 수 있어', '운영자 명령어', '어떻게 써', 'admin help' 같은 "
+                "사용법/기능 안내를 요청할 때. 운영자만 — member/bystander 호출자는 send_message 로 일반 안내."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "set_presenter",
             "description": (
                 "특정 회차의 slot_1 또는 slot_2 에 발표자 배정/교체/제거. 운영자만. "
@@ -371,6 +382,8 @@ send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에
    - '빼/제거/취소' → name=null.
    - 토픽 같이 말하면 topic 도 채워. 안 말하면 null (앞 사람 토픽이 자동 클리어됨 — 정상 동작).
    - 사용자가 '5/28' 처럼 줄여 말하면 오늘 기준 가까운 미래 목요일로 보정해서 YYYY-MM-DD 만들어라.
+- *운영자 도움말/사용법 요청* ('도움말', '뭐 할 수 있어', '명령어 알려줘', '어떻게 써' 등)
+  → 호출자가 admin 이면 admin_help. member/bystander 면 send_message 로 일반 안내 (채널 자기소개 메시지 참고하라고).
 - *권한/지식 밖* — 봇이 답할 수 없거나 운영자 판단 필요 → escalate_to_admin
    - 예: '회의실 예약 좀', '발표비 정산', '봇 기능에 없는 외부 시스템 연동 요청' 등
 - 인사/잡담/그 외 → send_message
@@ -581,6 +594,10 @@ def _dispatch(
 
     if tool_name == "set_presenter":
         _tool_set_presenter(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin)
+        return
+
+    if tool_name == "admin_help":
+        _tool_admin_help(client, conn, slack_user_id, dm_channel, is_admin=is_admin)
         return
 
     log.warning("unknown tool: %s", tool_name)
@@ -830,6 +847,17 @@ def _tool_set_member_pool(
         _say(client, conn, slack_user_id, dm_channel,
              f":speaker: *{m.name}* 발표 풀에 다시 포함됨.")
     log.info("set_member_pool: %s excluded=%s by %s", m.name, excluded, slack_user_id)
+
+
+def _tool_admin_help(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, *, is_admin: bool,
+) -> None:
+    if not is_admin:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":information_source: 일반 사용자용 안내는 채널 자기소개 메시지를 참고해주세요.")
+        return
+    from . import intro_message
+    _say(client, conn, slack_user_id, dm_channel, intro_message.build_admin_help())
 
 
 def _tool_set_presenter(
