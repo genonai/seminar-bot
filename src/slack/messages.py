@@ -22,6 +22,24 @@ def fmt_date(d: date | str) -> str:
     return f"{d.month}/{d.day} ({WEEKDAY_KO[d.weekday()]})"
 
 
+def format_presenters(s: Schedule) -> str:
+    """발표자 콤마 결합 — 'X' 또는 'X, Y' 또는 '_미정_'."""
+    names = s.presenters()
+    return ", ".join(names) if names else "_미정_"
+
+
+def format_presenters_inline(s: Schedule) -> str:
+    """리스트 한 줄용: 'X — _토픽_' 또는 'X — _토픽1_, Y — _토픽2_' (토픽 없으면 이름만)."""
+    names = s.presenters()
+    if not names:
+        return "_미정_"
+    parts: list[str] = []
+    for n in names:
+        topic = s.topic_for(n)
+        parts.append(f"{n} — _{topic}_" if topic else n)
+    return ", ".join(parts)
+
+
 # ─────────────────────────────────────────────────────────────
 # /세미나-일정
 # ─────────────────────────────────────────────────────────────
@@ -35,10 +53,11 @@ def upcoming_schedule(
 
     lines: list[str] = [":calendar: *다가올 세미나 일정*", ""]
     for s in schedules:
-        viewer_in_slot = bool(s.slot_1 and name_to_slack.get(s.slot_1) == viewer_user_id)
+        viewer_in_slot = any(
+            name_to_slack.get(n) == viewer_user_id for n in s.presenters()
+        )
         marker = ":star:" if viewer_in_slot else "  "
-        slot_1 = s.slot_1 or "_미정_"
-        lines.append(f"{marker} *{fmt_date(s.date)}* 14:00 — {slot_1}")
+        lines.append(f"{marker} *{fmt_date(s.date)}* 14:00 — {format_presenters(s)}")
     return "\n".join(lines)
 
 

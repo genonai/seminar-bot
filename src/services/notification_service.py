@@ -86,18 +86,29 @@ def send_thursday_announce(client: WebClient, conn: sqlite3.Connection, today_th
     s = schedule_service.get_by_date(conn, today_thu)
     if s is None or s.status not in {"예정"}:
         return
-    slot_1 = s.slot_1 or "_미정_"
-    t1 = f" — _{s.slot_1_topic}_" if s.slot_1_topic else ""
+    presenter_lines = _format_presenter_lines(s) or ["  • 발표: *_미정_*"]
     note_line = f"\n:pushpin: {s.notes}" if s.notes else ""
     broadcast(
         client,
         text=(
             f":sparkles: *오늘 14:00 주간 세미나*\n"
-            f"  • 발표: *{slot_1}*{t1}{note_line}\n"
-            "관심 있으신 분 모두 환영합니다 :coffee:"
+            + "\n".join(presenter_lines)
+            + note_line
+            + "\n관심 있으신 분 모두 환영합니다 :coffee:"
         ),
     )
     log.info("thursday_announce → broadcast for %s", today_thu)
+
+
+def _format_presenter_lines(s, *, with_topic: bool = True) -> list[str]:
+    """발표자별 한 줄 + 토픽 한 줄. 빈 슬롯이면 빈 리스트."""
+    from ..models import Schedule  # noqa
+    lines: list[str] = []
+    for name in s.presenters():
+        topic = s.topic_for(name) if with_topic else None
+        suffix = f" — _{topic}_" if topic else ""
+        lines.append(f"  • 발표: *{name}*{suffix}")
+    return lines
 
 
 def send_monday_preview(client: WebClient, conn: sqlite3.Connection, today_mon: date) -> None:
@@ -111,18 +122,28 @@ def send_monday_preview(client: WebClient, conn: sqlite3.Connection, today_mon: 
         log.info("monday_preview: %s 일정 없음 (또는 취소/완료), skip", target_thu)
         return
 
-    slot_1 = s.slot_1 or "_미정_"
-    t1 = f"\n     ↳ 토픽: {s.slot_1_topic}" if s.slot_1_topic else "\n     ↳ 토픽: _아직 미공유_"
+    presenter_lines = _format_presenter_lines_with_topic_block(s) or ["  • 발표: *_미정_*"]
     note_line = f"\n:pushpin: *안내*: {s.notes}" if s.notes else ""
     broadcast(
         client,
         text=(
             f":calendar: *이번 주 목요일 ({target_thu.month}/{target_thu.day}) 14:00 — 주간 세미나*\n"
-            f"  • 발표: *{slot_1}*{t1}{note_line}\n"
-            "발표자분 자료 마감은 수요일 14:00입니다 :muscle:"
+            + "\n".join(presenter_lines)
+            + note_line
+            + "\n발표자분 자료 마감은 수요일 14:00입니다 :muscle:"
         ),
     )
     log.info("monday_preview → broadcast for %s", target_thu)
+
+
+def _format_presenter_lines_with_topic_block(s) -> list[str]:
+    """월요일 preview 용: 발표자별로 이름 한 줄 + '↳ 토픽: ...' 한 줄."""
+    lines: list[str] = []
+    for name in s.presenters():
+        topic = s.topic_for(name)
+        topic_line = f"\n     ↳ 토픽: {topic}" if topic else "\n     ↳ 토픽: _아직 미공유_"
+        lines.append(f"  • 발표: *{name}*{topic_line}")
+    return lines
 
 
 def send_topic_reminders(client: WebClient, conn: sqlite3.Connection, today: date) -> None:
@@ -136,17 +157,20 @@ def send_topic_reminders(client: WebClient, conn: sqlite3.Connection, today: dat
     if s is None or s.status != "예정":
         return
 
-    if s.slot_1 and not s.slot_1_topic:
-        m = member_service.get_by_name(conn, s.slot_1)
-        if m is not None:
-            ch = _open_dm(client, m.slack_user_id)
-            _dm_with_memory(client, conn, slack_user_id=m.slack_user_id, channel=ch,
-                text=(
-                    f":memo: 다음 주 {target.month}/{target.day}(목) 14:00 발표 — 아직 토픽 미공유.\n"
-                    "이번에 다룰 내용 한 줄로 알려주시면 자동 저장됩니다."
-                ),
-            )
-            log.info("topic_reminder DM → %s for %s", m.name, target)
+    for name in s.presenters():
+        if s.topic_for(name):
+            continue
+        m = member_service.get_by_name(conn, name)
+        if m is None:
+            continue
+        ch = _open_dm(client, m.slack_user_id)
+        _dm_with_memory(client, conn, slack_user_id=m.slack_user_id, channel=ch,
+            text=(
+                f":memo: 다음 주 {target.month}/{target.day}(목) 14:00 발표 — 아직 토픽 미공유.\n"
+                "이번에 다룰 내용 한 줄로 알려주시면 자동 저장됩니다."
+            ),
+        )
+        log.info("topic_reminder DM → %s for %s", m.name, target)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -182,11 +206,10 @@ def send_defer_deadline_reminders(client: WebClient, conn: sqlite3.Connection, t
 def announce_new_cycle(client: WebClient, schedules: list, cycle_id: int) -> None:
     if not schedules:
         return
-    from ..slack.messages import fmt_date
+    from ..slack.messages import fmt_date, format_presenters
     lines = [f":dart: *다음 사이클(cycle {cycle_id}) 자동 추첨 결과*", ""]
     for s in schedules:
-        slot_1 = s.slot_1 or "_미정_"
-        lines.append(f"• *{fmt_date(s.date)}* 14:00 — {slot_1}")
+        lines.append(f"• *{fmt_date(s.date)}* 14:00 — {format_presenters(s)}")
     lines.append("")
     lines.append("선호도 기반 자동 배정. 변경 의견은 운영자에게 알려주세요.")
     broadcast(client, text="\n".join(lines))
@@ -203,22 +226,17 @@ def broadcast_schedule_summary(
 
     if scope == "this_week":
         s = upcoming[0]
-        slot_1 = s.slot_1 or "_미정_"
-        topic_line = (
-            f"\n     ↳ 토픽: {s.slot_1_topic}" if s.slot_1_topic
-            else "\n     ↳ 토픽: _아직 미공유_"
-        )
+        presenter_lines = _format_presenter_lines_with_topic_block(s) or ["  • 발표: *_미정_*"]
         note_line = f"\n:pushpin: *안내*: {s.notes}" if s.notes else ""
         text = (
             f":calendar: *{messages.fmt_date(s.date)} 14:00 — 주간 세미나*\n"
-            f"  • 발표: *{slot_1}*{topic_line}{note_line}"
+            + "\n".join(presenter_lines)
+            + note_line
         )
     else:  # upcoming
         lines = [":calendar: *다가올 세미나 일정*", ""]
         for s in upcoming:
-            slot_1 = s.slot_1 or "_미정_"
-            topic = f" — _{s.slot_1_topic}_" if s.slot_1_topic else ""
-            lines.append(f"• *{messages.fmt_date(s.date)}* 14:00 — {slot_1}{topic}")
+            lines.append(f"• *{messages.fmt_date(s.date)}* 14:00 — {messages.format_presenters_inline(s)}")
         text = "\n".join(lines)
 
     broadcast(client, text=text)
@@ -239,21 +257,22 @@ def ask_for_topics(client: WebClient, conn: sqlite3.Connection, schedules: list)
     from ..slack.messages import fmt_date
 
     for s in schedules:
-        if not s.slot_1 or s.slot_1_topic:
-            continue
-        m = member_service.get_by_name(conn, s.slot_1)
-        if m is None:
-            continue
-        try:
-            ch = _open_dm(client, m.slack_user_id)
-            _dm_with_memory(client, conn, slack_user_id=m.slack_user_id, channel=ch,
-                text=(
-                    f":wave: 안녕하세요 *{m.name}*님! *{fmt_date(s.date)} 14:00* 발표가 배정됐어요 :tada:\n\n"
-                    "이번에 다룰 토픽 한 줄로 알려주시면 자동 저장됩니다.\n"
-                    "예: _\"LLM agent ReAct vs Reflexion 비교\"_\n"
-                    "수정도 새 메시지 보내시면 됩니다."
-                ),
-            )
-            log.info("topic ask DM → %s for %s", m.name, s.date)
-        except Exception as e:
-            log.warning("topic ask DM → %s 실패: %s", m.name, e)
+        for name in s.presenters():
+            if s.topic_for(name):
+                continue
+            m = member_service.get_by_name(conn, name)
+            if m is None:
+                continue
+            try:
+                ch = _open_dm(client, m.slack_user_id)
+                _dm_with_memory(client, conn, slack_user_id=m.slack_user_id, channel=ch,
+                    text=(
+                        f":wave: 안녕하세요 *{m.name}*님! *{fmt_date(s.date)} 14:00* 발표가 배정됐어요 :tada:\n\n"
+                        "이번에 다룰 토픽 한 줄로 알려주시면 자동 저장됩니다.\n"
+                        "예: _\"LLM agent ReAct vs Reflexion 비교\"_\n"
+                        "수정도 새 메시지 보내시면 됩니다."
+                    ),
+                )
+                log.info("topic ask DM → %s for %s", m.name, s.date)
+            except Exception as e:
+                log.warning("topic ask DM → %s 실패: %s", m.name, e)

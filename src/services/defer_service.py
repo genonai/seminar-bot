@@ -90,7 +90,7 @@ def find_requester_assignment(
         return None
     upcoming = schedule_service.get_upcoming(conn, today=today, limit=10)
     for s in upcoming:
-        if s.slot_1 == member.name:
+        if member.name in s.presenters():
             return s.date, member.name
     return None
 
@@ -129,7 +129,12 @@ def select_next_replacement(
     """
     d = get(conn, defer_id)
     excluded = set(d.tried_replacements) | {d.requester}
-    # 1명/주 전환 후 같은 날 중복 슬롯이 없어 추가 제외 대상도 없음.
+    # 같은 날 다른 슬롯에 이미 있는 사람도 제외 — 한 사람이 양 슬롯 동시에 채우는 것 방지.
+    same_day = schedule_service.get_by_date(conn, d.original_date)
+    if same_day is not None:
+        for name in same_day.presenters():
+            if name != d.requester:
+                excluded.add(name)
 
     # 현 cycle 안에 있는 모든 멤버 이름
     in_cycle = _members_in_cycle(conn, d.original_date)
@@ -150,7 +155,7 @@ def select_next_replacement(
 
 
 def _members_in_cycle(conn: sqlite3.Connection, target_date: date) -> set[str]:
-    """target_date가 속한 cycle의 모든 슬롯에 들어있는 사람 이름 set."""
+    """target_date가 속한 cycle의 모든 슬롯(slot_1, slot_2)에 들어있는 사람 이름 set."""
     row = conn.execute(
         "SELECT cycle_id FROM schedule WHERE date = ?", (target_date.isoformat(),)
     ).fetchone()
@@ -158,10 +163,16 @@ def _members_in_cycle(conn: sqlite3.Connection, target_date: date) -> set[str]:
         return set()
     cycle_id = row["cycle_id"]
     rows = conn.execute(
-        "SELECT slot_1 FROM schedule WHERE cycle_id = ? AND status != '취소'",
+        "SELECT slot_1, slot_2 FROM schedule WHERE cycle_id = ? AND status != '취소'",
         (cycle_id,),
     ).fetchall()
-    return {r["slot_1"] for r in rows if r["slot_1"]}
+    names: set[str] = set()
+    for r in rows:
+        if r["slot_1"]:
+            names.add(r["slot_1"])
+        if r["slot_2"]:
+            names.add(r["slot_2"])
+    return names
 
 
 def assign_replacement(conn: sqlite3.Connection, defer_id: int, replacement_name: str) -> None:

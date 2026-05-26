@@ -444,30 +444,31 @@ def _answer_schedule(
     member = member_service.get_by_slack_id(conn, slack_user_id)
     upcoming = schedule_service.get_upcoming(conn, today=today, limit=10)
 
-    def _slot_str(name: str | None, topic: str | None) -> str:
-        if not name:
-            return "_빈슬롯_"
-        if topic:
-            return f"{name} (토픽: {topic})"
-        return f"{name} (토픽 미등록)"
+    def _presenter_str(name: str, topic: str | None) -> str:
+        return f"{name} (토픽: {topic})" if topic else f"{name} (토픽 미등록)"
 
     lines: list[str] = []
+    topic_filled = 0
+    topic_slots = 0
     for s in upcoming:
+        names = s.presenters()
+        if not names:
+            body = "_빈슬롯_"
+        else:
+            body = ", ".join(_presenter_str(n, s.topic_for(n)) for n in names)
+            topic_slots += len(names)
+            topic_filled += sum(1 for n in names if s.topic_for(n))
         lines.append(
-            f"- {s.date.isoformat()} ({messages.WEEKDAY_KO[s.date.weekday()]}) 14:00: "
-            f"{_slot_str(s.slot_1, s.slot_1_topic)}"
+            f"- {s.date.isoformat()} ({messages.WEEKDAY_KO[s.date.weekday()]}) 14:00: {body}"
             + (f"  📌 {s.notes}" if s.notes else "")
         )
     schedule_text = "\n".join(lines) or "(일정 없음)"
-
-    topic_filled = sum(1 for s in upcoming if s.slot_1_topic)
-    topic_slots = sum(1 for s in upcoming if s.slot_1)
     schedule_text += f"\n\n토픽 등록 통계: {topic_filled}/{topic_slots} 슬롯"
 
     user_assignment = "없음"
     if member is not None:
         for s in upcoming:
-            if s.slot_1 == member.name:
+            if member.name in s.presenters():
                 user_assignment = s.date.isoformat()
                 break
 
@@ -552,7 +553,7 @@ def _save_seminar_note(
 
     upcoming = schedule_service.get_upcoming(conn, today=today, limit=6)
     upcoming_payload = [
-        {"date": s.date.isoformat(), "slot_1": s.slot_1}
+        {"date": s.date.isoformat(), "presenters": s.presenters()}
         for s in upcoming
     ]
 

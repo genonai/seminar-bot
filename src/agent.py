@@ -248,6 +248,43 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "set_presenter",
+            "description": (
+                "특정 회차의 slot_1 또는 slot_2 에 발표자 배정/교체/제거. 운영자만. "
+                "1명/주 자동 추첨 후 ad-hoc 으로 2명 발표 만들거나, 임의 교체할 때 사용. "
+                "예: '5/28 한 명 더 추가해, 김재선' → slot=2, name='김재선'. "
+                "'6/4 두 번째 발표자 빼' → slot=2, name=null. "
+                "'6/11 첫 발표자 임종석으로 바꿔, 토픽 RAG eval' → slot=1, name='임종석', topic='RAG eval'. "
+                "토픽 명시 안 하면 기존 슬롯 토픽은 자동 클리어 (앞 사람 토픽 인계 방지)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_date": {
+                        "type": "string",
+                        "description": "YYYY-MM-DD. 사용자가 '5/28' 처럼 줄여 말하면 올해 기준으로 보정.",
+                    },
+                    "slot": {
+                        "type": "integer",
+                        "enum": [1, 2],
+                        "description": "1=첫 번째 발표자, 2=두 번째 발표자. '추가/한 명 더' 같으면 2.",
+                    },
+                    "name": {
+                        "type": ["string", "null"],
+                        "description": "배정할 멤버 이름 (한국어). null=해당 슬롯 비우기.",
+                    },
+                    "topic": {
+                        "type": ["string", "null"],
+                        "description": "선택. 새 배정과 동시에 토픽 등록. 미지정이면 null (기존 슬롯 토픽 자동 클리어).",
+                    },
+                },
+                "required": ["target_date", "slot", "name", "topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "broadcast_schedule",
             "description": (
                 "운영자가 DM 에서 세미나 일정을 등록 채널(BROADCAST_CHANNELS)에 즉시 공지하고 싶을 때. "
@@ -327,6 +364,13 @@ send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에
   → set_member_pool(target_name='X', excluded=true/false)
 - *채널 일정 공지* (운영자만): '채널에 일정 공유해' / '일정 공지해' / '이번주 발표자 채널에 띄워'
   → broadcast_schedule(scope='this_week' 또는 'upcoming'). 모호하면 upcoming.
+- *발표자 배정/교체/제거* (운영자만): '5/28 한 명 더 추가, 김재선' / '6/4 두 번째 발표자 빼' / '6/11 첫 발표자 임종석으로 바꿔'
+  → set_presenter(target_date='YYYY-MM-DD', slot=1|2, name='이름' 또는 null, topic='토픽' 또는 null)
+   - '한 명 더', '추가', '두 번째' → slot=2. '교체', '바꿔', '첫', '메인' → 보통 slot=1 (또는 위 upcoming 표의 빈 슬롯).
+   - 사용자 명시 안 했고 빈 슬롯이 있으면 빈 쪽을 먼저 채워라.
+   - '빼/제거/취소' → name=null.
+   - 토픽 같이 말하면 topic 도 채워. 안 말하면 null (앞 사람 토픽이 자동 클리어됨 — 정상 동작).
+   - 사용자가 '5/28' 처럼 줄여 말하면 오늘 기준 가까운 미래 목요일로 보정해서 YYYY-MM-DD 만들어라.
 - *권한/지식 밖* — 봇이 답할 수 없거나 운영자 판단 필요 → escalate_to_admin
    - 예: '회의실 예약 좀', '발표비 정산', '봇 기능에 없는 외부 시스템 연동 요청' 등
 - 인사/잡담/그 외 → send_message
@@ -384,11 +428,17 @@ def run(
     hits_text = _format_hits(hits)
 
     upcoming = schedule_service.get_upcoming(conn, today=today, limit=5)
-    upcoming_text = "\n".join(
-        f"  - {s.date.isoformat()} 14:00: {s.slot_1 or '미정'}"
-        + (f" / 토픽 {s.slot_1_topic!r}" if s.slot_1_topic else "")
-        for s in upcoming
-    ) or "  (없음)"
+    def _upcoming_line(s) -> str:
+        names = s.presenters()
+        if not names:
+            return f"  - {s.date.isoformat()} 14:00: 미정"
+        parts: list[str] = []
+        for i, n in enumerate(names, start=1):
+            topic = s.topic_for(n)
+            label = f"slot_{i}={n}" + (f" 토픽={topic!r}" if topic else "")
+            parts.append(label)
+        return f"  - {s.date.isoformat()} 14:00: " + " / ".join(parts)
+    upcoming_text = "\n".join(_upcoming_line(s) for s in upcoming) or "  (없음)"
 
     sys = _system_prompt(
         caller_name=caller_name, caller_role=caller_role,
@@ -454,7 +504,7 @@ def run(
 # ─────────────────────────────────────────────────────────────
 # Dispatcher
 # ─────────────────────────────────────────────────────────────
-MUTATION_TOOLS = {"set_topic", "set_seminar_note", "start_defer_flow", "start_preference_flow", "set_member_pool", "broadcast_schedule"}
+MUTATION_TOOLS = {"set_topic", "set_seminar_note", "start_defer_flow", "start_preference_flow", "set_member_pool", "broadcast_schedule", "set_presenter"}
 
 
 def _dispatch(
@@ -527,6 +577,10 @@ def _dispatch(
 
     if tool_name == "broadcast_schedule":
         _tool_broadcast_schedule(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin)
+        return
+
+    if tool_name == "set_presenter":
+        _tool_set_presenter(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin)
         return
 
     log.warning("unknown tool: %s", tool_name)
@@ -776,6 +830,75 @@ def _tool_set_member_pool(
         _say(client, conn, slack_user_id, dm_channel,
              f":speaker: *{m.name}* 발표 풀에 다시 포함됨.")
     log.info("set_member_pool: %s excluded=%s by %s", m.name, excluded, slack_user_id)
+
+
+def _tool_set_presenter(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+    *, is_admin: bool,
+) -> None:
+    if not is_admin:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":no_entry_sign: 발표자 변경은 운영자만 가능합니다.")
+        return
+    target_str = (args.get("target_date") or "").strip()
+    slot_raw = args.get("slot")
+    name_arg = args.get("name")
+    topic_arg = args.get("topic")
+    name = (name_arg or "").strip() if isinstance(name_arg, str) else None
+    if name == "":
+        name = None
+    topic = (topic_arg or "").strip() if isinstance(topic_arg, str) else None
+    if topic == "":
+        topic = None
+
+    try:
+        target_date = date.fromisoformat(target_str)
+    except Exception:
+        _say(client, conn, slack_user_id, dm_channel,
+             f":x: 날짜 형식이 잘못됐어요 (받은 값: {target_str!r}). YYYY-MM-DD 로 알려주세요.")
+        return
+    try:
+        slot = int(slot_raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        _say(client, conn, slack_user_id, dm_channel,
+             ":x: slot은 1 또는 2 여야 해요.")
+        return
+    if slot not in (1, 2):
+        _say(client, conn, slack_user_id, dm_channel,
+             ":x: slot은 1 또는 2 여야 해요.")
+        return
+
+    # 이름 정규화: slack mention 형식이면 member 조회로 이름 변환.
+    if name and name.startswith("<@") and ">" in name:
+        uid = name[2:name.index(">")].split("|")[0]
+        m = member_service.get_by_slack_id(conn, uid)
+        if m is not None:
+            name = m.name
+
+    if name is not None:
+        m = member_service.get_by_name(conn, name)
+        if m is None:
+            _say(client, conn, slack_user_id, dm_channel,
+                 f":x: '{name}' 발표 멤버를 찾지 못했어요. 정확한 이름 다시 확인 부탁드립니다.")
+            return
+
+    try:
+        new_s = schedule_service.set_presenter(
+            conn, target_date, slot, name, topic=topic,
+        )
+    except ValueError as e:
+        _say(client, conn, slack_user_id, dm_channel, f":x: {e}")
+        return
+
+    if name is None:
+        _say(client, conn, slack_user_id, dm_channel,
+             f":wastebasket: *{target_date.isoformat()}* slot_{slot} 비움.")
+    else:
+        topic_line = f"\n> _{topic}_" if topic else ""
+        _say(client, conn, slack_user_id, dm_channel,
+             f":white_check_mark: *{target_date.isoformat()}* slot_{slot} ← *{name}*{topic_line}")
+    log.info("set_presenter by %s: date=%s slot=%s name=%r topic=%r → %s",
+             slack_user_id, target_date, slot, name, topic, new_s)
 
 
 def _tool_broadcast_schedule(

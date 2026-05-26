@@ -61,11 +61,25 @@ class Schedule:
     notes: str | None = None                # 운영자 자유 노트 (장소/시간 변경/특이사항)
 
     def presenters(self) -> list[str]:
-        return [self.slot_1] if self.slot_1 else []
+        out: list[str] = []
+        if self.slot_1:
+            out.append(self.slot_1)
+        if self.slot_2:
+            out.append(self.slot_2)
+        return out
 
     def topic_for(self, name: str) -> str | None:
         if self.slot_1 == name:
             return self.slot_1_topic
+        if self.slot_2 == name:
+            return self.slot_2_topic
+        return None
+
+    def slot_of(self, name: str) -> int | None:
+        if self.slot_1 == name:
+            return 1
+        if self.slot_2 == name:
+            return 2
         return None
 
 

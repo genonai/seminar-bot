@@ -124,11 +124,10 @@ def mark_past_seminars_completed(conn: sqlite3.Connection, today: date | None = 
     with conn:
         for row in rows:
             d = date.fromisoformat(row["date"])
-            # 1명/주 전환 후 slot_1 만 카운트. slot_2 컬럼은 과거 데이터용으로 존재할 수 있으나 무시.
-            name = row["slot_1"]
-            if name:
-                # 자동 완료 시점에 presented_count++ 와 last_presented 갱신.
-                # last_presented는 더 최근 날짜만 반영 (옛 자료 catch-up 시 역행 방지).
+            # slot_1 + slot_2 모두 카운트. ad-hoc 으로 추가된 2명 발표자 페어니스 보존.
+            for name in (row["slot_1"], row["slot_2"]):
+                if not name:
+                    continue
                 conn.execute(
                     """
                     UPDATE members

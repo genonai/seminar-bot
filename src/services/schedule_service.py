@@ -88,13 +88,18 @@ def upsert(conn: sqlite3.Connection, s: Schedule) -> None:
 def set_topic(
     conn: sqlite3.Connection, target_date: date, presenter_name: str, topic: str
 ) -> bool:
-    """target_date의 slot_1이 presenter_name 이면 topic 갱신. Returns True if updated."""
+    """target_date의 slot_1 또는 slot_2가 presenter_name 이면 해당 슬롯의 topic 갱신.
+    Returns True if updated."""
     s = get_by_date(conn, target_date)
-    if s is None or s.slot_1 != presenter_name:
+    if s is None:
         return False
+    slot = s.slot_of(presenter_name)
+    if slot is None:
+        return False
+    column = "slot_1_topic" if slot == 1 else "slot_2_topic"
     with conn:
         conn.execute(
-            "UPDATE schedule SET slot_1_topic = ? WHERE date = ?",
+            f"UPDATE schedule SET {column} = ? WHERE date = ?",
             (topic, target_date.isoformat()),
         )
     return True
@@ -130,14 +135,50 @@ def get_next_seminar(
     return _row_to_schedule(row) if row else None
 
 
-def replace_presenter(
-    conn: sqlite3.Connection, target_date: date, old_name: str, new_name: str
-) -> None:
-    """해당 날짜 schedule에서 old_name을 new_name으로 교체."""
+def set_presenter(
+    conn: sqlite3.Connection,
+    target_date: date,
+    slot: int,
+    name: str | None,
+    *,
+    topic: str | None = None,
+) -> Schedule:
+    """target_date의 slot_N(=1|2)에 name 배정. name=None이면 해당 슬롯 비움 (토픽도 같이 클리어).
+    topic 주어지면 같은 트랜잭션에 갱신. name 채우는데 topic=None이면 기존 슬롯 토픽 클리어 (orphan 방지).
+
+    raise ValueError: 일정 없음 / slot 잘못됨 / 같은 사람이 다른 슬롯에 이미 있음.
+    """
+    if slot not in (1, 2):
+        raise ValueError(f"slot은 1 또는 2 (got {slot})")
     s = get_by_date(conn, target_date)
     if s is None:
         raise ValueError(f"{target_date} 일정 없음")
-    if s.slot_1 != old_name:
-        raise ValueError(f"{target_date} 일정에 {old_name} 없음 (slot_1={s.slot_1})")
-    s.slot_1 = new_name
-    upsert(conn, s)
+    other_slot_name = s.slot_2 if slot == 1 else s.slot_1
+    if name is not None and other_slot_name == name:
+        raise ValueError(f"{name}님이 같은 날 다른 슬롯에 이미 배정됨")
+
+    name_col = f"slot_{slot}"
+    topic_col = f"slot_{slot}_topic"
+    # 이름이 바뀌면 (또는 비우면) 그 슬롯의 토픽은 새 사람 인계 방지 위해 항상 함께 리셋.
+    # 호출자가 topic 을 명시했으면 그것으로 덮어씀.
+    new_topic = topic if name is not None else None
+    with conn:
+        conn.execute(
+            f"UPDATE schedule SET {name_col} = ?, {topic_col} = ? WHERE date = ?",
+            (name, new_topic, target_date.isoformat()),
+        )
+    return get_by_date(conn, target_date)  # type: ignore[return-value]
+
+
+def replace_presenter(
+    conn: sqlite3.Connection, target_date: date, old_name: str, new_name: str
+) -> None:
+    """해당 날짜 schedule에서 old_name이 들어있는 슬롯을 new_name으로 교체.
+    내부적으로 set_presenter 호출 — 토픽은 자동 클리어."""
+    s = get_by_date(conn, target_date)
+    if s is None:
+        raise ValueError(f"{target_date} 일정 없음")
+    slot = s.slot_of(old_name)
+    if slot is None:
+        raise ValueError(f"{target_date} 일정에 {old_name} 없음 (slot_1={s.slot_1}, slot_2={s.slot_2})")
+    set_presenter(conn, target_date, slot, new_name)

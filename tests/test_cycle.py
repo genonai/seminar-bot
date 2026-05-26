@@ -115,10 +115,27 @@ def test_mark_past_seminars_completed() -> None:
     completed = cycle_service.mark_past_seminars_completed(conn, today=date(2026, 5, 8))
     assert len(completed) == 1
     assert completed[0].date == date(2026, 5, 7)
-    # 1명/주: slot_1 발표자 1명만 stats 갱신
+    # 자동 추첨: slot_1 발표자 1명만 stats 갱신
     rows = conn.execute(
         "SELECT name, presented_count, last_presented FROM members WHERE last_presented IS NOT NULL"
     ).fetchall()
     assert len(rows) == 1
     assert rows[0]["presented_count"] == 1
     assert rows[0]["last_presented"] == "2026-05-07"
+
+
+def test_mark_past_seminars_counts_both_slots() -> None:
+    """운영자가 ad-hoc 으로 slot_2 채운 회차도 카운트되는지."""
+    from src.services import schedule_service
+    conn = _conn()
+    _seed_members(conn, ["A", "B", "C", "D", "E", "F", "G", "H", "I"])
+    today = date(2026, 5, 5)
+    cycle_service.generate_next_cycle(conn, today, seed=0)
+    # 5/7 에 두 번째 발표자 ad-hoc 추가 (slot_1 자리는 추첨된 사람 유지)
+    schedule_service.set_presenter(conn, date(2026, 5, 7), 2, "B")
+    completed = cycle_service.mark_past_seminars_completed(conn, today=date(2026, 5, 8))
+    assert len(completed) == 1
+    rows = conn.execute(
+        "SELECT name, presented_count FROM members WHERE last_presented = '2026-05-07'"
+    ).fetchall()
+    assert len(rows) == 2  # slot_1 + slot_2 둘 다 카운트
