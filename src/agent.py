@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from openai import OpenAI
@@ -30,9 +30,49 @@ from .services import (
     vector_service,
 )
 from .config import ADMIN_JJR
-from . import llm_service
 
 log = logging.getLogger(__name__)
+
+
+ROLE_RANK = {
+    "bystander": 0,
+    "member": 1,
+    "admin": 2,
+}
+
+
+TOOL_REQUIRED_ROLE = {
+    "send_message": "bystander",
+    "answer_schedule_question": "bystander",
+    "answer_material_question": "bystander",
+    "escalate_to_admin": "bystander",
+    "set_topic": "member",
+    "start_defer_flow": "member",
+    "start_preference_flow": "member",
+    "add_memo": "member",
+    "list_memos": "member",
+    "set_seminar_note": "admin",
+    "set_member_pool": "admin",
+    "admin_help": "admin",
+    "set_presenter": "admin",
+    "broadcast_schedule": "admin",
+    "manage_admin": "admin",
+    "inspect_db_state": "admin",
+    "plan_next_steps": "bystander",
+    "dm_user": "admin",
+}
+
+
+ROLE_DENIAL_MESSAGES = {
+    "admin": ":no_entry_sign: 운영자만 사용할 수 있는 기능이에요.",
+    "member": ":no_entry_sign: 발표 멤버만 사용할 수 있는 기능이에요. 일정/자료 조회는 가능합니다.",
+    "bystander": ":no_entry_sign: 권한이 부족해요.",
+}
+
+
+def _has_tool_role(caller_role: str, tool_name: str) -> bool:
+    required = TOOL_REQUIRED_ROLE.get(tool_name, "admin")
+    return ROLE_RANK.get(caller_role, 0) >= ROLE_RANK[required]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -317,6 +357,119 @@ TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "manage_admin",
+            "description": (
+                "운영자 권한 추가/삭제/목록 조회. 운영자만. "
+                "'@사용자 운영자 추가', '운영자 목록', 'X 어드민 빼줘' 같은 요청에 사용."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add", "remove", "list"],
+                        "description": "add=운영자 추가, remove=운영자 삭제, list=운영자 목록",
+                    },
+                    "target_user": {
+                        "type": ["string", "null"],
+                        "description": "add/remove 대상 Slack mention 또는 user_id. list면 null.",
+                    },
+                },
+                "required": ["action", "target_user"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_db_state",
+            "description": (
+                "DB 상태를 안전하게 조회. 운영자만. 임의 SQL 실행이 아니라 allowlist 된 상태만 읽는다. "
+                "멤버/제외목록/운영자/다가올 일정/메모 요약 확인에 사용."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "scope": {
+                        "type": "string",
+                        "enum": ["admins", "members", "excluded_members", "upcoming_schedule", "memos"],
+                        "description": "조회할 DB 상태 범위",
+                    },
+                },
+                "required": ["scope"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "plan_next_steps",
+            "description": (
+                "사용자 요청이 여러 단계이거나 바로 실행하기 위험/모호할 때, DM 대화 history와 현재 상태를 바탕으로 "
+                "짧은 실행 계획을 제시하고 필요한 확인/추가 정보를 요청한다. 실제 변경은 하지 않는다."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "사용자가 달성하려는 목표를 한 줄로 요약",
+                    },
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 5,
+                        "description": "봇이 수행할 계획. 각 단계는 짧은 한국어 문장.",
+                    },
+                    "needs_confirmation": {
+                        "type": "boolean",
+                        "description": "실행 전 사용자 확인이 필요한지 여부",
+                    },
+                    "question": {
+                        "type": ["string", "null"],
+                        "description": "사용자에게 필요한 확인/추가 질문. 없으면 null.",
+                    },
+                },
+                "required": ["goal", "steps", "needs_confirmation", "question"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "dm_user",
+            "description": (
+                "운영자가 특정 사용자에게 DM을 보내거나 보낼 메시지를 초안으로 만들 때 사용. 운영자만. "
+                "사용자가 명확히 '보내줘/전송해'라고 한 경우에만 send_now=true. 애매하면 send_now=false로 초안만 보여준다."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_user": {
+                        "type": "string",
+                        "description": "수신자 Slack mention/user_id 또는 발표 멤버 이름",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "수신자에게 보낼 DM 본문",
+                    },
+                    "send_now": {
+                        "type": "boolean",
+                        "description": "true=즉시 발송, false=운영자에게 초안만 보여주고 확인 요청",
+                    },
+                    "reason": {
+                        "type": ["string", "null"],
+                        "description": "왜 보내는지 운영자 확인용 짧은 설명",
+                    },
+                },
+                "required": ["target_user", "text", "send_now", "reason"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "send_message",
             "description": "위 도구 어디에도 해당 안 되는 경우 사용자에게 일반 텍스트 응답 (인사, 모호한 질문 안내, 거절, 잡담 등).",
             "parameters": {
@@ -350,8 +503,8 @@ def _system_prompt(
 역할: {caller_role}    (admin=운영자, member=발표 풀 멤버, bystander=외부 청중)
 오늘: {today_iso}
 
-bystander 는 *읽기(answer_schedule_question / answer_material_question / send_message)*만 가능.
-mutation 요청 (set_topic / set_seminar_note / start_defer_flow / start_preference_flow) 시도하면
+bystander 는 *읽기(answer_schedule_question / answer_material_question / send_message / escalate_to_admin)*만 가능.
+mutation 요청 (set_topic / set_seminar_note / start_defer_flow / start_preference_flow / add_memo 등) 시도하면
 send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에요").
 
 # 도구 선택 가이드
@@ -384,14 +537,29 @@ send_message 로 정중히 거절 (예: "발표 멤버만 가능한 기능이에
    - 사용자가 '5/28' 처럼 줄여 말하면 오늘 기준 가까운 미래 목요일로 보정해서 YYYY-MM-DD 만들어라.
 - *운영자 도움말/사용법 요청* ('도움말', '뭐 할 수 있어', '명령어 알려줘', '어떻게 써' 등)
   → 호출자가 admin 이면 admin_help. member/bystander 면 send_message 로 일반 안내 (채널 자기소개 메시지 참고하라고).
+- *운영자 관리* (운영자만): '@누구 운영자 추가/삭제', '운영자 목록'
+  → manage_admin(action='add'/'remove'/'list', target_user='<@U...>' 또는 null)
+- *DB 상태 조회* (운영자만): 'DB 상태', '제외 목록 보여줘', '멤버 풀 확인', '다가올 일정 DB 확인'
+  → inspect_db_state(scope='admins'/'members'/'excluded_members'/'upcoming_schedule'/'memos')
+  - 임의 SQL 실행은 지원하지 않는다. 필요한 경우 가장 가까운 scope를 고른다.
+- *사용자 DM 발송/초안* (운영자만): '@누구에게 X라고 DM 보내줘', '허성환님께 토픽 알려달라고 메시지 써줘'
+  → dm_user(target_user='...', text='...', send_now=true/false, reason='...')
+  - "보내줘", "전송해", "DM 해줘"처럼 즉시 발송 의도가 명확하면 send_now=true.
+  - "초안", "써줘", "어떻게 보낼까"처럼 검토 요청이면 send_now=false.
+  - 수신자/본문이 모호하면 plan_next_steps 또는 send_message로 확인 질문.
 - *권한/지식 밖* — 봇이 답할 수 없거나 운영자 판단 필요 → escalate_to_admin
    - 예: '회의실 예약 좀', '발표비 정산', '봇 기능에 없는 외부 시스템 연동 요청' 등
+- 여러 단계 요청, 위험한 변경, 대상/날짜/채널이 모호한 요청 → plan_next_steps
+   - 예: "다음 사이클 다시 짜고 공지도 해줘", "운영자 정리하고 풀도 업데이트해줘"
+   - 계획만 제시하고 실제 변경은 하지 않는다. 사용자가 확인/세부정보를 주면 다음 턴에서 적절한 실행 tool 호출.
 - 인사/잡담/그 외 → send_message
 
 # 대화 history 활용 (중요)
 직전 봇 발화가 토픽/노트를 물어봤다면 사용자 짧은 답을 그에 대한 응답으로 해석.
 예) 봇이 '허성환 토픽 미등록' → 사용자 'pydanticAI' → set_topic(target=null, topic='pydanticAI')
 예) 봇이 일정 조회 답함 → 사용자 '허성환은 pydanticAI한데' → admin 이면 set_topic(target='허성환', topic='pydanticAI')
+사용자가 "그거", "저 사람", "위 일정", "아까 말한 날짜"처럼 지시하면 반드시 대화 history에서 참조 대상을 찾는다.
+history로도 대상이 확정되지 않으면 plan_next_steps 또는 send_message로 짧게 확인 질문한다.
 
 # 다가올 일정
 {upcoming_text}
@@ -504,7 +672,7 @@ def run(
                 client, conn,
                 tool_name=call.function.name, args=args,
                 slack_user_id=slack_user_id, dm_channel=dm_channel,
-                caller_member=caller_member, is_admin=is_admin,
+                caller_member=caller_member, is_admin=is_admin, caller_role=caller_role,
                 hits=hits, today=today,
             )
         return
@@ -514,24 +682,22 @@ def run(
         _say(client, conn, slack_user_id, dm_channel, msg.content.strip())
 
 
-# ─────────────────────────────────────────────────────────────
-# Dispatcher
-# ─────────────────────────────────────────────────────────────
-MUTATION_TOOLS = {"set_topic", "set_seminar_note", "start_defer_flow", "start_preference_flow", "set_member_pool", "broadcast_schedule", "set_presenter"}
-
-
 def _dispatch(
     client: WebClient, conn,
     *,
     tool_name: str, args: dict[str, Any],
     slack_user_id: str, dm_channel: str,
-    caller_member, is_admin: bool,
+    caller_member, is_admin: bool, caller_role: str,
     hits: list[dict[str, Any]], today: date,
 ) -> None:
-    # bystander 가드: 읽기만 허용
-    if (caller_member is None and not is_admin and tool_name in MUTATION_TOOLS):
-        _say(client, conn, slack_user_id, dm_channel,
-             ":no_entry_sign: 발표 멤버만 사용 가능한 기능이에요. 일정/자료 조회는 가능합니다.")
+    required_role = TOOL_REQUIRED_ROLE.get(tool_name)
+    if required_role is None:
+        log.warning("unknown tool before dispatch: %s", tool_name)
+        _say(client, conn, slack_user_id, dm_channel, ":x: 알 수 없는 도구 호출. 운영자 확인 필요.")
+        return
+
+    if not _has_tool_role(caller_role, tool_name):
+        _say(client, conn, slack_user_id, dm_channel, ROLE_DENIAL_MESSAGES[required_role])
         return
 
     if tool_name == "send_message":
@@ -600,6 +766,22 @@ def _dispatch(
         _tool_admin_help(client, conn, slack_user_id, dm_channel, is_admin=is_admin)
         return
 
+    if tool_name == "manage_admin":
+        _tool_manage_admin(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin)
+        return
+
+    if tool_name == "inspect_db_state":
+        _tool_inspect_db_state(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin, today=today)
+        return
+
+    if tool_name == "plan_next_steps":
+        _tool_plan_next_steps(client, conn, slack_user_id, dm_channel, args)
+        return
+
+    if tool_name == "dm_user":
+        _tool_dm_user(client, conn, slack_user_id, dm_channel, args, is_admin=is_admin)
+        return
+
     log.warning("unknown tool: %s", tool_name)
     _say(client, conn, slack_user_id, dm_channel, ":x: 알 수 없는 도구 호출. 운영자 확인 필요.")
 
@@ -620,6 +802,37 @@ def _norm_name(s: str | None) -> str:
         if out.endswith(suffix):
             out = out[: -len(suffix)]
     return out.strip().lower()
+
+
+def _parse_slack_user_id(text: str | None) -> str | None:
+    """Slack mention('<@U...|name>'), raw user id, or empty text → user id."""
+    if not text:
+        return None
+    text = text.strip()
+    if text.startswith("<@") and ">" in text:
+        inner = text[2:text.index(">")]
+        return inner.split("|")[0]
+    first = text.split()[0] if text.split() else ""
+    if first.startswith("U") and len(first) >= 9:
+        return first
+    return None
+
+
+def _member_from_target(conn, target: str | None):
+    if not target:
+        return None
+    uid = _parse_slack_user_id(target)
+    if uid:
+        return member_service.get_by_slack_id(conn, uid)
+    return member_service.get_by_name(conn, target.strip())
+
+
+def _resolve_target_user_id(conn, target: str | None) -> str | None:
+    uid = _parse_slack_user_id(target)
+    if uid:
+        return uid
+    member = _member_from_target(conn, target)
+    return member.slack_user_id if member else None
 
 
 _SELF_PRONOUNS = {
@@ -795,8 +1008,10 @@ def _tool_list_memos(
     )
     if not rows:
         scope_label = []
-        if seminar_date: scope_label.append(seminar_date)
-        if category: scope_label.append(f"#{category}")
+        if seminar_date:
+            scope_label.append(seminar_date)
+        if category:
+            scope_label.append(f"#{category}")
         scope = f" ({', '.join(scope_label)})" if scope_label else ""
         _say(client, conn, slack_user_id, dm_channel, f":notebook: 메모 없음{scope}.")
         return
@@ -831,7 +1046,7 @@ def _tool_set_member_pool(
         _say(client, conn, slack_user_id, dm_channel,
              "어떤 멤버를 제외/포함할지 이름을 알려주세요.")
         return
-    m = member_service.get_by_name(conn, target_name)
+    m = _member_from_target(conn, target_name)
     if m is None:
         _say(client, conn, slack_user_id, dm_channel,
              f":x: '{target_name}' 멤버를 찾지 못했어요. 정확한 이름 다시 확인 부탁드립니다.")
@@ -948,6 +1163,207 @@ def _tool_broadcast_schedule(
         log.info("broadcast_schedule by %s scope=%s", slack_user_id, scope)
     else:
         _say(client, conn, slack_user_id, dm_channel, f":x: 공지 실패: {info}")
+
+
+def _tool_manage_admin(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+    *, is_admin: bool,
+) -> None:
+    if not is_admin:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":no_entry_sign: 운영자 관리는 운영자만 가능합니다.")
+        return
+
+    action = (args.get("action") or "").strip()
+    target = args.get("target_user")
+
+    if action == "list":
+        rows = admin_service.list_admins(conn)
+        if not rows:
+            _say(client, conn, slack_user_id, dm_channel,
+                 ":busts_in_silhouette: 운영자 없음 (DB 부트스트랩 실패 가능).")
+            return
+        lines = [":busts_in_silhouette: *현재 운영자 목록*"]
+        for r in rows:
+            tag = " :star: (primary)" if r["is_primary"] else ""
+            lines.append(f"• <@{r['slack_user_id']}>{tag}  _added {r['added_at']}_")
+        _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+        return
+
+    target_uid = _parse_slack_user_id(target)
+    if target_uid is None:
+        _say(client, conn, slack_user_id, dm_channel,
+             "대상 사용자를 Slack 멘션(`<@U...>`)이나 user ID로 알려주세요.")
+        return
+
+    if action == "add":
+        added = admin_service.add_admin(conn, target_uid, added_by=slack_user_id)
+        if added:
+            _say(client, conn, slack_user_id, dm_channel,
+                 f":white_check_mark: <@{target_uid}> 운영자로 추가됨.")
+        else:
+            _say(client, conn, slack_user_id, dm_channel,
+                 f":information_source: <@{target_uid}> 이미 운영자입니다.")
+        return
+
+    if action == "remove":
+        ok, reason = admin_service.remove_admin(conn, target_uid)
+        if ok:
+            _say(client, conn, slack_user_id, dm_channel,
+                 f":wastebasket: <@{target_uid}> 운영자 권한 해제됨.")
+        else:
+            _say(client, conn, slack_user_id, dm_channel,
+                 f":no_entry_sign: 제거 실패: {reason}")
+        return
+
+    _say(client, conn, slack_user_id, dm_channel,
+         ":x: 운영자 관리 action은 add/remove/list 중 하나여야 합니다.")
+
+
+def _tool_inspect_db_state(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+    *, is_admin: bool, today: date,
+) -> None:
+    if not is_admin:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":no_entry_sign: DB 상태 조회는 운영자만 가능합니다.")
+        return
+
+    scope = (args.get("scope") or "").strip()
+    if scope == "admins":
+        rows = admin_service.list_admins(conn)
+        lines = [":busts_in_silhouette: *admins*"]
+        lines.extend(
+            f"• <@{r['slack_user_id']}> primary={bool(r['is_primary'])} added={r['added_at']}"
+            for r in rows
+        )
+        _say(client, conn, slack_user_id, dm_channel, "\n".join(lines) if len(lines) > 1 else "admins: 없음")
+        return
+
+    if scope == "members":
+        members = member_service.get_all(conn)
+        active_ids = {m.slack_user_id for m in member_service.get_all_active(conn)}
+        lines = [f":card_index: *members* ({len(members)} total, {len(active_ids)} active pool)"]
+        for m in members[:50]:
+            status = "pool" if m.slack_user_id in active_ids else "inactive/excluded"
+            lines.append(f"• {m.name} <@{m.slack_user_id}> — {status}")
+        _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+        return
+
+    if scope == "excluded_members":
+        rows = member_service.list_excluded(conn)
+        if not rows:
+            _say(client, conn, slack_user_id, dm_channel, ":speaker: 제외된 멤버 없음.")
+            return
+        lines = [":mute: *발표 풀 제외 멤버*"]
+        for r in rows:
+            in_ch = "" if r["is_active"] else " _(채널 떠남)_"
+            lines.append(f"• <@{r['slack_user_id']}> ({r['name']}){in_ch}")
+        _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+        return
+
+    if scope == "upcoming_schedule":
+        upcoming = schedule_service.get_upcoming(conn, today=today, limit=10)
+        if not upcoming:
+            _say(client, conn, slack_user_id, dm_channel, ":calendar: 다가올 일정 없음.")
+            return
+        lines = [":calendar: *다가올 일정 DB 상태*"]
+        for s in upcoming:
+            topic = f" — _{s.slot_1_topic}_" if s.slot_1_topic else ""
+            note = f" / note={s.notes}" if s.notes else ""
+            lines.append(f"• {s.date.isoformat()} 14:00 — {s.slot_1 or '미정'}{topic}{note}")
+        _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+        return
+
+    if scope == "memos":
+        rows = memo_service.list_memos(conn, limit=20)
+        if not rows:
+            _say(client, conn, slack_user_id, dm_channel, ":notebook: 메모 없음.")
+            return
+        lines = [":notebook: *최근 메모*"]
+        for r in rows:
+            sem = f" [{r['seminar_date']}]" if r.get("seminar_date") else ""
+            lines.append(f"• #{r['id']} {r['category']}{sem}: {r['content']}")
+        _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+        return
+
+    _say(client, conn, slack_user_id, dm_channel,
+         ":x: DB 조회 scope는 admins/members/excluded_members/upcoming_schedule/memos 중 하나여야 합니다.")
+
+
+def _tool_plan_next_steps(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+) -> None:
+    goal = (args.get("goal") or "").strip() or "요청 처리"
+    raw_steps = args.get("steps") or []
+    steps = [str(s).strip() for s in raw_steps if str(s).strip()][:5]
+    if not steps:
+        steps = ["요청 내용을 확인한다.", "필요한 도구를 선택해 처리한다."]
+    needs_confirmation = bool(args.get("needs_confirmation"))
+    question = (args.get("question") or "").strip()
+
+    lines = [f":clipboard: *처리 계획*: {goal}"]
+    for i, step in enumerate(steps, start=1):
+        lines.append(f"{i}. {step}")
+    if needs_confirmation:
+        lines.append("")
+        lines.append(question or "이대로 진행해도 될까요?")
+    elif question:
+        lines.append("")
+        lines.append(question)
+    _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+
+
+def _tool_dm_user(
+    client: WebClient, conn, slack_user_id: str, dm_channel: str, args: dict[str, Any],
+    *, is_admin: bool,
+) -> None:
+    if not is_admin:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":no_entry_sign: 사용자 DM 발송은 운영자만 가능합니다.")
+        return
+
+    target = (args.get("target_user") or "").strip()
+    text = (args.get("text") or "").strip()
+    reason = (args.get("reason") or "").strip()
+    send_now = bool(args.get("send_now"))
+
+    target_uid = _resolve_target_user_id(conn, target)
+    if target_uid is None:
+        _say(client, conn, slack_user_id, dm_channel,
+             f":x: '{target}' 사용자를 찾지 못했어요. Slack 멘션이나 정확한 이름으로 알려주세요.")
+        return
+    if not text:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":x: 보낼 DM 본문이 비어있어요.")
+        return
+    if target_uid == slack_user_id:
+        _say(client, conn, slack_user_id, dm_channel,
+             ":information_source: 자기 자신에게 보내는 DM이라 초안으로만 보여드릴게요.")
+        send_now = False
+
+    if not send_now:
+        lines = [
+            ":memo: *DM 초안*",
+            f"To: <@{target_uid}>",
+        ]
+        if reason:
+            lines.append(f"Reason: {reason}")
+        lines.extend(["", text, "", "보내려면 `이대로 보내줘`처럼 다시 말씀해주세요."])
+        _say(client, conn, slack_user_id, dm_channel, "\n".join(lines))
+        return
+
+    try:
+        target_dm = client.conversations_open(users=target_uid)["channel"]["id"]
+        client.chat_postMessage(channel=target_dm, text=text)
+    except Exception as e:
+        log.exception("dm_user 실패 target=%s", target_uid)
+        _say(client, conn, slack_user_id, dm_channel, f":x: <@{target_uid}> DM 발송 실패: {e}")
+        return
+
+    _say(client, conn, slack_user_id, dm_channel,
+         f":envelope_with_arrow: <@{target_uid}>에게 DM 보냈습니다.")
+    log.info("dm_user sent: from_admin=%s target=%s reason=%r", slack_user_id, target_uid, reason[:80])
 
 
 def _tool_escalate(
