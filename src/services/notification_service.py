@@ -102,7 +102,6 @@ def send_thursday_announce(client: WebClient, conn: sqlite3.Connection, today_th
 
 def _format_presenter_lines(s, *, with_topic: bool = True) -> list[str]:
     """발표자별 한 줄 + 토픽 한 줄. 빈 슬롯이면 빈 리스트."""
-    from ..models import Schedule  # noqa
     lines: list[str] = []
     for name in s.presenters():
         topic = s.topic_for(name) if with_topic else None
