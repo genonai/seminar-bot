@@ -27,9 +27,9 @@ def _last_seminar_date(conn: sqlite3.Connection) -> date | None:
 
 
 def upcoming_count(conn: sqlite3.Connection, today: date) -> int:
-    """오늘 이후의 일정 개수 (status NOT IN 취소/완료)."""
+    """오늘 포함 다가올 일정 개수 (status NOT IN 취소/완료)."""
     row = conn.execute(
-        "SELECT COUNT(*) AS c FROM schedule WHERE date > ? AND status NOT IN ('취소', '완료')",
+        "SELECT COUNT(*) AS c FROM schedule WHERE date >= ? AND status NOT IN ('취소', '완료')",
         (today.isoformat(),),
     ).fetchone()
     return int(row["c"])

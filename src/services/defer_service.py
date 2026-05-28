@@ -88,8 +88,7 @@ def find_requester_assignment(
     member = member_service.get_by_slack_id(conn, slack_user_id)
     if member is None:
         return None
-    # include_today=True — 당일 발표자도 자기 일정으로 찾을 수 있게 (자료 제출/연기 용도)
-    upcoming = schedule_service.get_upcoming(conn, today=today, limit=10, include_today=True)
+    upcoming = schedule_service.get_upcoming(conn, today=today, limit=10)
     for s in upcoming:
         if member.name in s.presenters():
             return s.date, member.name
