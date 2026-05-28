@@ -1,7 +1,7 @@
 """APScheduler 백그라운드 잡.
 
 - 매주 수 14:00  → 자료 마감 리마인더 (내일 발표자 DM)
-- 매주 목 10:00  → 오늘 발표 채널 공지
+- 매주 목 10:30  → 오늘 발표 채널 공지
 - 매주 목 16:00  → 지난 일정 자동 완료 마킹 + 발표자 stats 갱신 (catch-up 포함)
 - 매일 12:00     → 연기 마감 임박 (8일 전) 발표자 DM
 - 매주 토 09:00  → 다가올 일정 < 2주면 다음 사이클 자동 추첨 + 채널 공지
@@ -115,7 +115,7 @@ def start_scheduler(client: WebClient) -> BackgroundScheduler:
     )
     scheduler.add_job(
         _job_thursday_announce, args=(client,),
-        trigger=CronTrigger(day_of_week="thu", hour=10, minute=0, timezone=TIMEZONE),
+        trigger=CronTrigger(day_of_week="thu", hour=10, minute=30, timezone=TIMEZONE),
         id="thursday_announce", replace_existing=True,
     )
     scheduler.add_job(
