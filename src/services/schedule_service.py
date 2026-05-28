@@ -36,15 +36,18 @@ def reminder_date_for(seminar: date) -> date:
 
 
 def get_upcoming(
-    conn: sqlite3.Connection, today: date | None = None, limit: int = 5
+    conn: sqlite3.Connection, today: date | None = None, limit: int = 5,
+    *, include_today: bool = False,
 ) -> list[Schedule]:
-    """오늘 이후(strictly >)의 일정. status='취소'/'완료' 제외.
-    오늘 자 세미나는 제외된다 (당일 시점에는 이미 진행 중이거나 끝남)."""
+    """다가올 일정. status='취소'/'완료' 제외.
+    기본 (include_today=False) 은 strictly date > today — 당일 세미나는 제외.
+    include_today=True 면 당일 회차도 포함 — 본인 일정 찾기(자료 제출/연기) 용도."""
     today = today or date.today()
+    op = ">=" if include_today else ">"
     rows = conn.execute(
-        """
+        f"""
         SELECT * FROM schedule
-        WHERE date > ? AND status NOT IN ('취소', '완료')
+        WHERE date {op} ? AND status NOT IN ('취소', '완료')
         ORDER BY date ASC
         LIMIT ?
         """,
