@@ -293,7 +293,7 @@ def escalation_dm() -> str:
 
 def jjr_rejection_dm(*, requester: str, original_date: date) -> str:
     return (
-        f":x: {requester}님 {fmt_date(original_date)} 연기 신청이 운영자(진재)에 의해 거절되었습니다."
+        f":x: {requester}님 {fmt_date(original_date)} 연기 신청이 운영자(<@{_primary_admin()}>)에 의해 거절되었습니다."
     )
 
 

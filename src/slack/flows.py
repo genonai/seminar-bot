@@ -405,7 +405,7 @@ def _begin_defer_in_dm(
         deadline = defer_service.deadline_for(assigned_date)
         client.chat_postMessage(
             channel=dm_channel,
-            text=f":no_entry_sign: 연기 신청 마감({deadline.isoformat()})이 지났습니다. 운영자(<@{ADMIN_JJR}>)에게 직접 문의해주세요.",
+            text=f":no_entry_sign: 연기 신청 마감({deadline.isoformat()})이 지났습니다. 운영자(<@{_primary_admin()}>)에게 직접 문의해주세요.",
         )
         return
 
